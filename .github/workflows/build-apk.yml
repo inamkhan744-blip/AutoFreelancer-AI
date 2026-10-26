@@ -18,11 +18,13 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
 
-    - name: Grant execute permission for gradlew
-      run: chmod +x gradlew
+    # Yeh step khud Gradle ko set up karega, gradlew ki zaroorat nahi padegi
+    - name: Setup Gradle
+      uses: gradle/actions/setup-gradle@v4
 
+    # Ab seedha gradle se build karein (./gradlew ki jagah gradle)
     - name: Build Debug APK
-      run: ./gradlew assembleDebug
+      run: gradle assembleDebug
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
