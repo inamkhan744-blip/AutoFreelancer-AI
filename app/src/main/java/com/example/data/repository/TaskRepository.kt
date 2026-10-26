@@ -322,6 +322,62 @@ class TaskRepository(
         return Result.failure(NoSuchElementException("Task $taskId not found"))
     }
 
+    suspend fun updateTaskExecution(
+        taskId: String,
+        newStatus: String,
+        appendDetails: String? = null,
+        newLog: String? = null
+    ): Result<Unit> {
+        val uid = auth?.currentUser?.uid
+        if (db != null && uid != null) {
+            val docRef = db.collection("users").document(uid).collection("tasks").document(taskId)
+            val path = docRef.path
+
+            return try {
+                val updates = mutableMapOf<String, Any>(
+                    "status" to newStatus,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+                if (!appendDetails.isNullOrBlank()) {
+                    val currentDoc = docRef.get().await()
+                    val existingDetails = currentDoc.getString("details").orEmpty()
+                    val combined = if (existingDetails.isNotBlank()) "$existingDetails\n\n$appendDetails" else appendDetails
+                    updates["details"] = combined
+                }
+                if (!newLog.isNullOrBlank()) {
+                    updates["logs"] = FieldValue.arrayUnion(newLog)
+                }
+                docRef.update(updates).await()
+                Result.success(Unit)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                handleFirestoreError(e, OperationType.UPDATE, path)
+                Result.failure(e)
+            }
+        }
+
+        // Local update
+        val current = localTasksFlow.value.toMutableList()
+        val index = current.indexOfFirst { it.id == taskId }
+        if (index != -1) {
+            val old = current[index]
+            val updatedLogs = old.logs.toMutableList()
+            if (!newLog.isNullOrBlank()) {
+                updatedLogs.add(newLog)
+            }
+            val finalDetails = if (!appendDetails.isNullOrBlank()) {
+                if (old.details.isNotBlank()) "${old.details}\n\n$appendDetails" else appendDetails
+            } else {
+                old.details
+            }
+            current[index] = old.copy(status = newStatus, details = finalDetails, logs = updatedLogs)
+            saveLocalTasks(current)
+            return Result.success(Unit)
+        }
+        return Result.failure(NoSuchElementException("Task $taskId not found"))
+    }
+
     suspend fun seedInitialTasksIfEmpty(): Result<Unit> {
         val uid = auth?.currentUser?.uid
         if (db != null && uid != null) {

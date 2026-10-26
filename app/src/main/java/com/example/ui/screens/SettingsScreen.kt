@@ -27,12 +27,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Email
-import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Key
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.RocketLaunch
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.TravelExplore
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
@@ -42,13 +44,13 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -75,12 +77,12 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.data.model.SearchProvider
 import com.example.data.repository.AppSettings
 import com.example.ui.theme.CyberError
 import com.example.ui.theme.CyberPrimary
 import com.example.ui.theme.CyberPrimaryLight
 import com.example.ui.theme.CyberSecondary
+import com.example.ui.theme.CyberSuccess
 import com.example.ui.theme.CyberTertiary
 import com.example.ui.viewmodel.DashboardViewModel
 import kotlinx.coroutines.launch
@@ -96,33 +98,49 @@ fun SettingsScreen(
     }
 
     val currentSettings by viewModel.settings.collectAsState()
-    val discoveryProgress by viewModel.discoveryProgress.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
-    var searchApiKey by remember(currentSettings) { mutableStateOf(currentSettings.searchApiKey) }
-    var emailApiKey by remember(currentSettings) { mutableStateOf(currentSettings.emailApiKey) }
-    var searchProvider by remember(currentSettings) { mutableStateOf(currentSettings.searchProvider) }
-    var googleCseId by remember(currentSettings) { mutableStateOf(currentSettings.googleCseId) }
+    // Form inputs initialized from EncryptedSharedPreferences
+    var groqApiKey by remember(currentSettings) { mutableStateOf(currentSettings.groqApiKey) }
+    var serperApiKey by remember(currentSettings) { mutableStateOf(currentSettings.serperApiKey) }
+    var tavilyApiKey by remember(currentSettings) { mutableStateOf(currentSettings.tavilyApiKey) }
+    var groqModel by remember(currentSettings) { mutableStateOf(currentSettings.groqModel) }
     var searchQuery by remember(currentSettings) { mutableStateOf(currentSettings.searchQuery) }
-    var senderEmail by remember(currentSettings) { mutableStateOf(currentSettings.senderEmail) }
-    var autoCreateTasks by remember(currentSettings) { mutableStateOf(currentSettings.autoCreateTasks) }
+    var autoRunOnApproval by remember(currentSettings) { mutableStateOf(currentSettings.autoRunOnApproval) }
 
-    var showSearchKey by remember { mutableStateOf(false) }
-    var showEmailKey by remember { mutableStateOf(false) }
+    // Password visibility toggles
+    var showGroqKey by remember { mutableStateOf(false) }
+    var showSerperKey by remember { mutableStateOf(false) }
+    var showTavilyKey by remember { mutableStateOf(false) }
+
+    // Test connection states
+    var groqTesting by remember { mutableStateOf(false) }
+    var groqTestResult by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
+
+    var serperTesting by remember { mutableStateOf(false) }
+    var serperTestResult by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
+
+    var tavilyTesting by remember { mutableStateOf(false) }
+    var tavilyTestResult by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
-                    Text(
-                        text = "Automated AI Worker Settings",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "Settings & API Keys",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                        )
+                    }
                 },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to Dashboard")
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back to Dashboard"
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -138,10 +156,10 @@ fun SettingsScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
-                .padding(16.dp),
+                .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Header Info Banner
+            // Security & Persistence Banner
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
@@ -157,7 +175,7 @@ fun SettingsScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
-                        imageVector = Icons.Default.RocketLaunch,
+                        imageVector = Icons.Default.Security,
                         contentDescription = null,
                         tint = CyberPrimaryLight,
                         modifier = Modifier.size(28.dp)
@@ -165,12 +183,12 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.width(12.dp))
                     Column {
                         Text(
-                            text = "Autonomous Scout & Outreach Config",
+                            text = "Encrypted On-Device Storage",
                             style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = "Configure your Search & Email API keys to discover leads on LinkedIn, Reddit & X, and let Gemini craft personalized audit pitches.",
+                            text = "All API keys are encrypted using EncryptedSharedPreferences (AES-256 GCM) with Android KeyStore and persist securely across restarts.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -178,135 +196,36 @@ fun SettingsScreen(
                 }
             }
 
-            // Section 1: API Keys
-            Card(
+            // Quick Status Pills
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                )
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Key, contentDescription = null, tint = CyberSecondary, modifier = Modifier.size(20.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "API Keys & Integrations",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                        )
-                    }
-
-                    // Search Provider Picker
-                    Text(text = "Search Engine Provider:", style = MaterialTheme.typography.labelMedium)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable { searchProvider = SearchProvider.SERPER }
-                                .padding(end = 8.dp)
-                        ) {
-                            RadioButton(
-                                selected = searchProvider == SearchProvider.SERPER,
-                                onClick = { searchProvider = SearchProvider.SERPER }
-                            )
-                            Text("Serper.dev", style = MaterialTheme.typography.bodySmall)
-                        }
-
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable { searchProvider = SearchProvider.GOOGLE_CSE }
-                                .padding(end = 8.dp)
-                        ) {
-                            RadioButton(
-                                selected = searchProvider == SearchProvider.GOOGLE_CSE,
-                                onClick = { searchProvider = SearchProvider.GOOGLE_CSE }
-                            )
-                            Text("Google Custom Search", style = MaterialTheme.typography.bodySmall)
-                        }
-                    }
-
-                    // Search API Key
-                    OutlinedTextField(
-                        value = searchApiKey,
-                        onValueChange = { searchApiKey = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("search_api_key_input"),
-                        label = { Text("Search API Key (${searchProvider.displayName})") },
-                        placeholder = { Text(if (searchProvider == SearchProvider.SERPER) "e.g. 1a2b3c... (from serper.dev)" else "Google API Key") },
-                        visualTransformation = if (showSearchKey) VisualTransformation.None else PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                        trailingIcon = {
-                            IconButton(onClick = { showSearchKey = !showSearchKey }) {
-                                Icon(
-                                    imageVector = if (showSearchKey) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                                    contentDescription = "Toggle key visibility"
-                                )
-                            }
-                        },
-                        singleLine = true
-                    )
-
-                    if (searchProvider == SearchProvider.GOOGLE_CSE) {
-                        OutlinedTextField(
-                            value = googleCseId,
-                            onValueChange = { googleCseId = it },
-                            modifier = Modifier.fillMaxWidth(),
-                            label = { Text("Google Search Engine ID (cx)") },
-                            placeholder = { Text("e.g. 0123456789:abcdefgh") },
-                            singleLine = true
-                        )
-                    }
-
-                    // Email API Key
-                    OutlinedTextField(
-                        value = emailApiKey,
-                        onValueChange = { emailApiKey = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("email_api_key_input"),
-                        label = { Text("Email Delivery API Key (Resend / SendGrid)") },
-                        placeholder = { Text("e.g. re_1234567890...") },
-                        visualTransformation = if (showEmailKey) VisualTransformation.None else PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                        trailingIcon = {
-                            IconButton(onClick = { showEmailKey = !showEmailKey }) {
-                                Icon(
-                                    imageVector = if (showEmailKey) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                                    contentDescription = "Toggle email key visibility"
-                                )
-                            }
-                        },
-                        singleLine = true
-                    )
-
-                    // Sender Email
-                    OutlinedTextField(
-                        value = senderEmail,
-                        onValueChange = { senderEmail = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Sender Email Address") },
-                        placeholder = { Text("e.g. director@youragency.com") },
-                        singleLine = true
-                    )
-                }
+                StatusPill(
+                    label = "Groq AI",
+                    isConfigured = groqApiKey.isNotBlank(),
+                    modifier = Modifier.weight(1f)
+                )
+                StatusPill(
+                    label = "Serper Search",
+                    isConfigured = serperApiKey.isNotBlank(),
+                    modifier = Modifier.weight(1f)
+                )
+                StatusPill(
+                    label = "Tavily Backup",
+                    isConfigured = tavilyApiKey.isNotBlank(),
+                    modifier = Modifier.weight(1f)
+                )
             }
 
-            // Section 2: Automated Search Query & Presets
+            // ==========================================
+            // 1. Groq API Key (for AI text generation)
+            // ==========================================
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(14.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
                 )
             ) {
                 Column(
@@ -314,23 +233,387 @@ fun SettingsScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Search, contentDescription = null, tint = CyberTertiary, modifier = Modifier.size(20.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Target Search Query for SEO Audits",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                        )
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(CircleShape)
+                                .background(CyberSecondary.copy(alpha = 0.2f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Psychology,
+                                contentDescription = null,
+                                tint = CyberSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                text = "1. Groq API Key",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+                            Text(
+                                text = "For AI text generation (LLaMA-3.3-70b)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
+
+                    Text(
+                        text = "Used when tasks are Approved to generate tailored SEO audit pitches, client proposals, and deliverable action plans in real-time.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    OutlinedTextField(
+                        value = groqApiKey,
+                        onValueChange = {
+                            groqApiKey = it
+                            groqTestResult = null
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("groq_api_key_input"),
+                        label = { Text("Groq API Key") },
+                        placeholder = { Text("e.g. gsk_...") },
+                        visualTransformation = if (showGroqKey) VisualTransformation.None else PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        trailingIcon = {
+                            IconButton(onClick = { showGroqKey = !showGroqKey }) {
+                                Icon(
+                                    imageVector = if (showGroqKey) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                    contentDescription = "Toggle Groq key visibility"
+                                )
+                            }
+                        },
+                        singleLine = true
+                    )
+
+                    // Model Selection Chips
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = "Groq Model:",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            val models = listOf(
+                                "llama-3.3-70b-versatile" to "LLaMA 3.3 70B (Recommended)",
+                                "llama-3.1-8b-instant" to "LLaMA 3.1 8B (Ultra Fast)",
+                                "mixtral-8x7b-32768" to "Mixtral 8x7B"
+                            )
+                            models.forEach { (id, label) ->
+                                FilterChip(
+                                    selected = groqModel == id,
+                                    onClick = { groqModel = id },
+                                    label = { Text(label, fontSize = 11.sp) },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = CyberSecondary.copy(alpha = 0.25f)
+                                    )
+                                )
+                            }
+                        }
+                    }
+
+                    // Test Groq Connection Button & Feedback
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                if (groqApiKey.isBlank()) {
+                                    groqTestResult = Pair(false, "Please enter a Groq API key first")
+                                    return@OutlinedButton
+                                }
+                                groqTesting = true
+                                groqTestResult = null
+                                viewModel.testGroqKey(groqApiKey) { success, msg ->
+                                    groqTesting = false
+                                    groqTestResult = Pair(success, msg)
+                                }
+                            },
+                            enabled = !groqTesting && groqApiKey.isNotBlank(),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            if (groqTesting) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Testing...", fontSize = 12.sp)
+                            } else {
+                                Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Test Groq Connection", fontSize = 12.sp)
+                            }
+                        }
+
+                        groqTestResult?.let { (success, msg) ->
+                            InlineStatusBadge(success = success, message = msg)
+                        }
+                    }
+                }
+            }
+
+            // ==========================================
+            // 2. Serper Search API Key (for finding clients)
+            // ==========================================
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(CircleShape)
+                                .background(CyberPrimary.copy(alpha = 0.2f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Search,
+                                contentDescription = null,
+                                tint = CyberPrimary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                text = "2. Serper Search API Key",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+                            Text(
+                                text = "For finding clients on the internet (Google Search)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = "Queries Google organically via Serper.dev to locate real businesses and founders actively seeking SEO audits on LinkedIn, Reddit, and Twitter.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    OutlinedTextField(
+                        value = serperApiKey,
+                        onValueChange = {
+                            serperApiKey = it
+                            serperTestResult = null
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("serper_api_key_input"),
+                        label = { Text("Serper Search API Key") },
+                        placeholder = { Text("e.g. key from serper.dev") },
+                        visualTransformation = if (showSerperKey) VisualTransformation.None else PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        trailingIcon = {
+                            IconButton(onClick = { showSerperKey = !showSerperKey }) {
+                                Icon(
+                                    imageVector = if (showSerperKey) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                    contentDescription = "Toggle Serper key visibility"
+                                )
+                            }
+                        },
+                        singleLine = true
+                    )
+
+                    // Test Serper Button & Feedback
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                if (serperApiKey.isBlank()) {
+                                    serperTestResult = Pair(false, "Please enter a Serper API key first")
+                                    return@OutlinedButton
+                                }
+                                serperTesting = true
+                                serperTestResult = null
+                                viewModel.testSerperKey(serperApiKey) { success, msg ->
+                                    serperTesting = false
+                                    serperTestResult = Pair(success, msg)
+                                }
+                            },
+                            enabled = !serperTesting && serperApiKey.isNotBlank(),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            if (serperTesting) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Testing...", fontSize = 12.sp)
+                            } else {
+                                Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Test Serper Search", fontSize = 12.sp)
+                            }
+                        }
+
+                        serperTestResult?.let { (success, msg) ->
+                            InlineStatusBadge(success = success, message = msg)
+                        }
+                    }
+                }
+            }
+
+            // ==========================================
+            // 3. Tavily Search API Key (as backup search)
+            // ==========================================
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(CircleShape)
+                                .background(CyberTertiary.copy(alpha = 0.2f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.TravelExplore,
+                                contentDescription = null,
+                                tint = CyberTertiary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                text = "3. Tavily Search API Key",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+                            Text(
+                                text = "As a backup search option (Automatic Fallback)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = "High-accuracy search engine optimized for AI agents. Automatically kicks in as a seamless backup if Serper is rate-limited or fails.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    OutlinedTextField(
+                        value = tavilyApiKey,
+                        onValueChange = {
+                            tavilyApiKey = it
+                            tavilyTestResult = null
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("tavily_api_key_input"),
+                        label = { Text("Tavily Search API Key") },
+                        placeholder = { Text("e.g. tvly-...") },
+                        visualTransformation = if (showTavilyKey) VisualTransformation.None else PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        trailingIcon = {
+                            IconButton(onClick = { showTavilyKey = !showTavilyKey }) {
+                                Icon(
+                                    imageVector = if (showTavilyKey) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                    contentDescription = "Toggle Tavily key visibility"
+                                )
+                            }
+                        },
+                        singleLine = true
+                    )
+
+                    // Test Tavily Button & Feedback
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                if (tavilyApiKey.isBlank()) {
+                                    tavilyTestResult = Pair(false, "Please enter a Tavily API key first")
+                                    return@OutlinedButton
+                                }
+                                tavilyTesting = true
+                                tavilyTestResult = null
+                                viewModel.testTavilyKey(tavilyApiKey) { success, msg ->
+                                    tavilyTesting = false
+                                    tavilyTestResult = Pair(success, msg)
+                                }
+                            },
+                            enabled = !tavilyTesting && tavilyApiKey.isNotBlank(),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            if (tavilyTesting) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Testing...", fontSize = 12.sp)
+                            } else {
+                                Icon(Icons.Default.TravelExplore, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Test Tavily (Backup)", fontSize = 12.sp)
+                            }
+                        }
+
+                        tavilyTestResult?.let { (success, msg) ->
+                            InlineStatusBadge(success = success, message = msg)
+                        }
+                    }
+                }
+            }
+
+            // ==========================================
+            // Search Query Configuration & Presets
+            // ==========================================
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        text = "Lead Discovery Search Formula",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                    )
 
                     OutlinedTextField(
                         value = searchQuery,
                         onValueChange = { searchQuery = it },
                         modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Search Query Formula") },
+                        label = { Text("Default Query Formula") },
                         minLines = 2
                     )
 
-                    Text(text = "Quick Query Presets:", style = MaterialTheme.typography.labelSmall)
+                    Text(text = "Quick Presets:", style = MaterialTheme.typography.labelSmall)
                     FlowRow(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -338,7 +621,7 @@ fun SettingsScreen(
                         val presets = listOf(
                             "looking for SEO audit site:linkedin.com",
                             "\"need someone to do an SEO audit\" site:reddit.com",
-                            "recommend SEO consultant site:x.com",
+                            "Shopify SEO audit site:x.com",
                             "hiring freelance SEO audit"
                         )
                         presets.forEach { preset ->
@@ -349,183 +632,118 @@ fun SettingsScreen(
                             )
                         }
                     }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Auto-Queue to Task Feed", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium))
-                            Text("Automatically create Pending tasks for approval when prospects are found", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Switch(
-                            checked = autoCreateTasks,
-                            onCheckedChange = { autoCreateTasks = it }
-                        )
-                    }
                 }
             }
 
+            // ==========================================
             // Save Settings Button
+            // ==========================================
             Button(
                 onClick = {
                     val updated = AppSettings(
-                        searchApiKey = searchApiKey,
-                        emailApiKey = emailApiKey,
-                        searchProvider = searchProvider,
-                        googleCseId = googleCseId,
-                        searchQuery = searchQuery,
-                        senderEmail = senderEmail,
-                        autoCreateTasks = autoCreateTasks
+                        groqApiKey = groqApiKey.trim(),
+                        serperApiKey = serperApiKey.trim(),
+                        tavilyApiKey = tavilyApiKey.trim(),
+                        groqModel = groqModel.trim(),
+                        searchQuery = searchQuery.trim(),
+                        autoRunOnApproval = autoRunOnApproval
                     )
                     viewModel.saveSettings(updated)
                     scope.launch {
-                        snackbarHostState.showSnackbar("Settings & API keys saved successfully!")
+                        snackbarHostState.showSnackbar("Keys saved securely in EncryptedSharedPreferences!")
                     }
                 },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(50.dp)
+                    .height(52.dp)
                     .testTag("save_settings_button"),
                 colors = ButtonDefaults.buttonColors(containerColor = CyberPrimary),
                 shape = RoundedCornerShape(12.dp)
             ) {
-                Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Save Configuration", fontWeight = FontWeight.Bold)
+                Text("Save Keys to Encrypted Storage", fontWeight = FontWeight.Bold)
             }
 
-            // Section 3: Live Lead Discovery & Gemini Pitch Test
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = Color(0xFF0F172A)
-                ),
-                border = CardDefaults.outlinedCardBorder().copy(
-                    brush = Brush.horizontalGradient(listOf(CyberSecondary, CyberTertiary))
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+    }
+}
+
+@Composable
+private fun StatusPill(
+    label: String,
+    isConfigured: Boolean,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier,
+        shape = RoundedCornerShape(10.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isConfigured) CyberSuccess.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        ),
+        border = CardDefaults.outlinedCardBorder().copy(
+            brush = Brush.horizontalGradient(
+                listOf(
+                    if (isConfigured) CyberSuccess else Color.Gray.copy(alpha = 0.4f),
+                    if (isConfigured) CyberSuccess.copy(alpha = 0.6f) else Color.Gray.copy(alpha = 0.2f)
                 )
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = CyberSecondary)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Run AI Lead Discovery Pipeline",
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                                color = Color.White
-                            )
-                        }
-                    }
-
-                    Text(
-                        text = "Triggers Search API to discover active SEO audit requests on the web, passes context to Gemini 3.8-Flash to draft personalized pitches, and stages tasks for your Approval.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFFCBD5E1)
-                    )
-
-                    Button(
-                        onClick = {
-                            viewModel.runLeadDiscovery(searchQuery)
-                        },
-                        enabled = !discoveryProgress.isRunning,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(48.dp)
-                            .testTag("run_discovery_button"),
-                        colors = ButtonDefaults.buttonColors(containerColor = CyberSecondary),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        if (discoveryProgress.isRunning) {
-                            CircularProgressIndicator(color = Color.Black, modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Running Pipeline...", color = Color.Black, fontWeight = FontWeight.Bold)
-                        } else {
-                            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.Black)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Run Lead Discovery & Pitch Generation", color = Color.Black, fontWeight = FontWeight.Bold)
-                        }
-                    }
-
-                    // Progress & Results Status
-                    AnimatedVisibility(visible = discoveryProgress.stepMessage.isNotBlank()) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(Color(0xFF1E293B), RoundedCornerShape(8.dp))
-                                .padding(12.dp)
-                        ) {
-                            if (discoveryProgress.isRunning) {
-                                LinearProgressIndicator(
-                                    modifier = Modifier.fillMaxWidth().height(4.dp),
-                                    color = CyberSecondary
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                            }
-                            Text(
-                                text = discoveryProgress.stepMessage,
-                                style = MaterialTheme.typography.bodyMedium.copy(
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = if (discoveryProgress.error != null) CyberError else CyberTertiary
-                                )
-                            )
-
-                            if (discoveryProgress.generatedPitches.isNotEmpty()) {
-                                Spacer(modifier = Modifier.height(10.dp))
-                                Text(
-                                    text = "Generated Pitches (${discoveryProgress.generatedPitches.size}):",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = Color.White
-                                )
-                                discoveryProgress.generatedPitches.forEach { pitch ->
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(vertical = 4.dp)
-                                            .background(Color(0xFF0F172A), RoundedCornerShape(6.dp))
-                                            .padding(8.dp)
-                                    ) {
-                                        Column {
-                                            Text(
-                                                text = "Prospect: ${pitch.prospectNameOrCompany}",
-                                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-                                                color = CyberSecondary
-                                            )
-                                            Text(
-                                                text = "Subject: ${pitch.subjectLine}",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = Color.White
-                                            )
-                                            Text(
-                                                text = "Est. Value: $${pitch.suggestedRateOrValue.toInt()}",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = CyberTertiary
-                                            )
-                                        }
-                                    }
-                                }
-
-                                Spacer(modifier = Modifier.height(8.dp))
-                                OutlinedButton(
-                                    onClick = onNavigateBack,
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Text("View & Approve in Dashboard")
-                                }
-                            }
-                        }
-                    }
-                }
+            )
+        )
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                imageVector = if (isConfigured) Icons.Default.CheckCircle else Icons.Default.Key,
+                contentDescription = null,
+                tint = if (isConfigured) CyberSuccess else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(14.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Column {
+                Text(
+                    text = label,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = if (isConfigured) "Configured" else "Not set",
+                    fontSize = 9.sp,
+                    color = if (isConfigured) CyberSuccess else MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
+    }
+}
+
+@Composable
+private fun InlineStatusBadge(
+    success: Boolean,
+    message: String
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(if (success) CyberSuccess.copy(alpha = 0.15f) else CyberError.copy(alpha = 0.15f))
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+    ) {
+        Icon(
+            imageVector = if (success) Icons.Default.CheckCircle else Icons.Default.Error,
+            contentDescription = null,
+            tint = if (success) CyberSuccess else CyberError,
+            modifier = Modifier.size(14.dp)
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(
+            text = message.take(30),
+            fontSize = 11.sp,
+            color = if (success) CyberSuccess else CyberError,
+            fontWeight = FontWeight.Medium
+        )
     }
 }

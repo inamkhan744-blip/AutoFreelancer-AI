@@ -10,6 +10,7 @@ val CyberSecondary = Color(0xFF06B6D4)
 val CyberSecondaryDark = Color(0xFF0891B2)
 
 val CyberTertiary = Color(0xFF10B981)
+val CyberSuccess = Color(0xFF10B981)
 val CyberWarning = Color(0xFFF59E0B)
 val CyberError = Color(0xFFF43F5E)
 

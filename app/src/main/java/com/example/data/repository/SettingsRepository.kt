@@ -2,58 +2,79 @@ package com.example.data.repository
 
 import android.content.Context
 import android.content.SharedPreferences
-import com.example.data.model.SearchProvider
+import android.util.Log
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 data class AppSettings(
-    val searchApiKey: String = "",
+    val groqApiKey: String = "",
+    val serperApiKey: String = "",
+    val tavilyApiKey: String = "",
+    val groqModel: String = "llama-3.3-70b-versatile",
+    val searchQuery: String = "looking for SEO audit OR \"need an SEO audit\" site:linkedin.com OR site:reddit.com OR site:x.com",
     val emailApiKey: String = "",
-    val searchProvider: SearchProvider = SearchProvider.SERPER,
-    val googleCseId: String = "",
-    val searchQuery: String = "looking for SEO audit OR \"need an SEO audit\" site:linkedin.com OR site:reddit.com",
-    val senderEmail: String = "",
-    val autoCreateTasks: Boolean = true
-)
+    val autoRunOnApproval: Boolean = true
+) {
+    val isGroqConfigured: Boolean
+        get() = groqApiKey.isNotBlank()
+
+    val isSearchConfigured: Boolean
+        get() = serperApiKey.isNotBlank() || tavilyApiKey.isNotBlank()
+}
 
 class SettingsRepository(context: Context) {
-    private val prefs: SharedPreferences = context.getSharedPreferences("autofreelancer_settings", Context.MODE_PRIVATE)
+    private val tag = "SettingsRepository"
+    private val securePrefs: SharedPreferences = createEncryptedPreferences(context)
 
     private val _settingsFlow = MutableStateFlow(loadSettings())
     val settingsFlow: StateFlow<AppSettings> = _settingsFlow.asStateFlow()
 
-    private fun loadSettings(): AppSettings {
-        val providerStr = prefs.getString("search_provider", SearchProvider.SERPER.name) ?: SearchProvider.SERPER.name
-        val provider = try {
-            SearchProvider.valueOf(providerStr)
-        } catch (e: Exception) {
-            SearchProvider.SERPER
-        }
+    private fun createEncryptedPreferences(context: Context): SharedPreferences {
+        return try {
+            val masterKey = MasterKey.Builder(context)
+                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                .build()
 
+            EncryptedSharedPreferences.create(
+                context,
+                "autofreelancer_secure_keys",
+                masterKey,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+            )
+        } catch (e: Exception) {
+            Log.w(tag, "EncryptedSharedPreferences unavailable, falling back to standard storage: ${e.message}")
+            context.getSharedPreferences("autofreelancer_secure_keys_fallback", Context.MODE_PRIVATE)
+        }
+    }
+
+    private fun loadSettings(): AppSettings {
         return AppSettings(
-            searchApiKey = prefs.getString("search_api_key", "").orEmpty(),
-            emailApiKey = prefs.getString("email_api_key", "").orEmpty(),
-            searchProvider = provider,
-            googleCseId = prefs.getString("google_cse_id", "").orEmpty(),
-            searchQuery = prefs.getString(
+            groqApiKey = securePrefs.getString("groq_api_key", "").orEmpty(),
+            serperApiKey = securePrefs.getString("serper_api_key", "").orEmpty(),
+            tavilyApiKey = securePrefs.getString("tavily_api_key", "").orEmpty(),
+            groqModel = securePrefs.getString("groq_model", "llama-3.3-70b-versatile") ?: "llama-3.3-70b-versatile",
+            searchQuery = securePrefs.getString(
                 "search_query",
-                "looking for SEO audit OR \"need an SEO audit\" site:linkedin.com OR site:reddit.com"
+                "looking for SEO audit OR \"need an SEO audit\" site:linkedin.com OR site:reddit.com OR site:x.com"
             ) ?: "looking for SEO audit",
-            senderEmail = prefs.getString("sender_email", "").orEmpty(),
-            autoCreateTasks = prefs.getBoolean("auto_create_tasks", true)
+            emailApiKey = securePrefs.getString("email_api_key", "").orEmpty(),
+            autoRunOnApproval = securePrefs.getBoolean("auto_run_approval", true)
         )
     }
 
     fun saveSettings(settings: AppSettings) {
-        prefs.edit()
-            .putString("search_api_key", settings.searchApiKey)
-            .putString("email_api_key", settings.emailApiKey)
-            .putString("search_provider", settings.searchProvider.name)
-            .putString("google_cse_id", settings.googleCseId)
-            .putString("search_query", settings.searchQuery)
-            .putString("sender_email", settings.senderEmail)
-            .putBoolean("auto_create_tasks", settings.autoCreateTasks)
+        securePrefs.edit()
+            .putString("groq_api_key", settings.groqApiKey.trim())
+            .putString("serper_api_key", settings.serperApiKey.trim())
+            .putString("tavily_api_key", settings.tavilyApiKey.trim())
+            .putString("groq_model", settings.groqModel.trim())
+            .putString("search_query", settings.searchQuery.trim())
+            .putString("email_api_key", settings.emailApiKey.trim())
+            .putBoolean("auto_run_approval", settings.autoRunOnApproval)
             .apply()
 
         _settingsFlow.value = settings

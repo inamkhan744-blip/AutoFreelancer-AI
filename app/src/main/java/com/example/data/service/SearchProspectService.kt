@@ -2,7 +2,6 @@ package com.example.data.service
 
 import android.util.Log
 import com.example.data.model.ProspectResult
-import com.example.data.model.SearchProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -10,123 +9,207 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
-import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
+
+data class SearchExecutionResult(
+    val leads: List<ProspectResult>,
+    val providerUsed: String,
+    val isBackupUsed: Boolean = false,
+    val note: String = ""
+)
 
 class SearchProspectService(
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(25, TimeUnit.SECONDS)
         .build()
 ) {
     private val tag = "SearchProspectService"
+    private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
-    suspend fun findSeoAuditProspects(
-        query: String = "looking for SEO audit OR \"need someone to do an SEO audit\" site:linkedin.com OR site:reddit.com",
-        apiKey: String,
-        provider: SearchProvider = SearchProvider.SERPER,
-        googleCseId: String? = null
-    ): Result<List<ProspectResult>> = withContext(Dispatchers.IO) {
-        if (apiKey.isBlank()) {
-            Log.d(tag, "No API key provided; using sandbox real-world prospect results.")
-            return@withContext Result.success(getFallbackProspects(query))
+    suspend fun searchWithFallback(
+        query: String,
+        serperKey: String,
+        tavilyKey: String
+    ): SearchExecutionResult = withContext(Dispatchers.IO) {
+        val cleanSerper = serperKey.trim()
+        val cleanTavily = tavilyKey.trim()
+
+        // 1. Try Serper first if key exists
+        if (cleanSerper.isNotBlank()) {
+            val serperResult = searchViaSerper(query, cleanSerper)
+            if (serperResult.isSuccess) {
+                val leads = serperResult.getOrThrow()
+                if (leads.isNotEmpty()) {
+                    return@withContext SearchExecutionResult(
+                        leads = leads,
+                        providerUsed = "Serper.dev",
+                        isBackupUsed = false,
+                        note = "Retrieved ${leads.size} live leads from Google via Serper API"
+                    )
+                }
+            } else {
+                Log.w(tag, "Serper search failed: ${serperResult.exceptionOrNull()?.message}")
+            }
         }
 
+        // 2. Try Tavily as backup if key exists
+        if (cleanTavily.isNotBlank()) {
+            val tavilyResult = searchViaTavily(query, cleanTavily)
+            if (tavilyResult.isSuccess) {
+                val leads = tavilyResult.getOrThrow()
+                val usedBackup = cleanSerper.isNotBlank()
+                return@withContext SearchExecutionResult(
+                    leads = leads,
+                    providerUsed = "Tavily AI Search",
+                    isBackupUsed = usedBackup,
+                    note = if (usedBackup) {
+                        "Serper unavailable. Successfully recovered with Tavily Backup (${leads.size} leads)"
+                    } else {
+                        "Retrieved ${leads.size} live leads via Tavily Search API"
+                    }
+                )
+            } else {
+                Log.w(tag, "Tavily backup search failed: ${tavilyResult.exceptionOrNull()?.message}")
+            }
+        }
+
+        // 3. Fallback when keys are missing or both failed
+        val isKeysEmpty = cleanSerper.isBlank() && cleanTavily.isBlank()
+        val note = if (isKeysEmpty) {
+            "No Serper or Tavily keys configured. Using verified sandbox audit targets."
+        } else {
+            "Live Search APIs reached rate limit or returned zero items. Using fallback targets."
+        }
+
+        SearchExecutionResult(
+            leads = getFallbackProspects(query),
+            providerUsed = "Sandbox Fallback",
+            isBackupUsed = true,
+            note = note
+        )
+    }
+
+    suspend fun searchViaSerper(query: String, apiKey: String): Result<List<ProspectResult>> = withContext(Dispatchers.IO) {
         try {
-            when (provider) {
-                SearchProvider.SERPER -> searchViaSerper(query, apiKey)
-                SearchProvider.GOOGLE_CSE -> searchViaGoogleCse(query, apiKey, googleCseId)
+            val requestBodyJson = JSONObject().apply {
+                put("q", query)
+                put("num", 5)
+            }
+
+            val request = Request.Builder()
+                .url("https://google.serper.dev/search")
+                .addHeader("X-API-KEY", apiKey.trim())
+                .addHeader("Content-Type", "application/json")
+                .post(requestBodyJson.toString().toRequestBody(jsonMediaType))
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                val body = response.body?.string().orEmpty()
+                if (!response.isSuccessful) {
+                    val msg = "Serper error ${response.code}: $body"
+                    Log.e(tag, msg)
+                    return@withContext Result.failure(Exception(msg))
+                }
+
+                val json = JSONObject(body)
+                val organicArray = json.optJSONArray("organic") ?: return@withContext Result.success(emptyList())
+
+                val list = mutableListOf<ProspectResult>()
+                for (i in 0 until organicArray.length()) {
+                    val item = organicArray.getJSONObject(i)
+                    val title = item.optString("title")
+                    val link = item.optString("link")
+                    val snippet = item.optString("snippet")
+                    val platform = detectPlatform(link, title)
+
+                    list.add(
+                        ProspectResult(
+                            title = title,
+                            link = link,
+                            snippet = snippet,
+                            sourcePlatform = platform,
+                            queryMatched = query
+                        )
+                    )
+                }
+                Result.success(list)
             }
         } catch (e: Exception) {
-            Log.e(tag, "Search API request failed: ${e.message}", e)
+            Log.e(tag, "Serper API request exception: ${e.message}", e)
             Result.failure(e)
         }
     }
 
-    private fun searchViaSerper(query: String, apiKey: String): Result<List<ProspectResult>> {
-        val jsonMediaType = "application/json; charset=utf-8".toMediaType()
-        val requestBodyJson = JSONObject().apply {
-            put("q", query)
-            put("num", 10)
-        }
-
-        val request = Request.Builder()
-            .url("https://google.serper.dev/search")
-            .addHeader("X-API-KEY", apiKey.trim())
-            .addHeader("Content-Type", "application/json")
-            .post(requestBodyJson.toString().toRequestBody(jsonMediaType))
-            .build()
-
-        client.newCall(request).execute().use { response ->
-            val responseBody = response.body?.string().orEmpty()
-            if (!response.isSuccessful) {
-                Log.e(tag, "Serper error ${response.code}: $responseBody")
-                return Result.failure(Exception("Serper API error ${response.code}: $responseBody"))
+    suspend fun searchViaTavily(query: String, apiKey: String): Result<List<ProspectResult>> = withContext(Dispatchers.IO) {
+        try {
+            val requestBodyJson = JSONObject().apply {
+                put("api_key", apiKey.trim())
+                put("query", query)
+                put("search_depth", "basic")
+                put("max_results", 5)
             }
 
-            val json = JSONObject(responseBody)
-            val organicArray = json.optJSONArray("organic") ?: return Result.success(emptyList())
+            val request = Request.Builder()
+                .url("https://api.tavily.com/search")
+                .addHeader("Content-Type", "application/json")
+                .post(requestBodyJson.toString().toRequestBody(jsonMediaType))
+                .build()
 
-            val list = mutableListOf<ProspectResult>()
-            for (i in 0 until organicArray.length()) {
-                val item = organicArray.getJSONObject(i)
-                val title = item.optString("title")
-                val link = item.optString("link")
-                val snippet = item.optString("snippet")
-                val platform = detectPlatform(link, title)
+            client.newCall(request).execute().use { response ->
+                val body = response.body?.string().orEmpty()
+                if (!response.isSuccessful) {
+                    val msg = "Tavily error ${response.code}: $body"
+                    Log.e(tag, msg)
+                    return@withContext Result.failure(Exception(msg))
+                }
 
-                list.add(
-                    ProspectResult(
-                        title = title,
-                        link = link,
-                        snippet = snippet,
-                        sourcePlatform = platform,
-                        queryMatched = query
+                val json = JSONObject(body)
+                val resultsArray = json.optJSONArray("results") ?: return@withContext Result.success(emptyList())
+
+                val list = mutableListOf<ProspectResult>()
+                for (i in 0 until resultsArray.length()) {
+                    val item = resultsArray.getJSONObject(i)
+                    val title = item.optString("title")
+                    val link = item.optString("url")
+                    val content = item.optString("content")
+                    val platform = detectPlatform(link, title)
+
+                    list.add(
+                        ProspectResult(
+                            title = title,
+                            link = link,
+                            snippet = content,
+                            sourcePlatform = platform,
+                            queryMatched = query
+                        )
                     )
-                )
+                }
+                Result.success(list)
             }
-            return Result.success(list)
+        } catch (e: Exception) {
+            Log.e(tag, "Tavily API request exception: ${e.message}", e)
+            Result.failure(e)
         }
     }
 
-    private fun searchViaGoogleCse(query: String, apiKey: String, cseId: String?): Result<List<ProspectResult>> {
-        val encodedQuery = URLEncoder.encode(query, "UTF-8")
-        val cx = cseId?.trim() ?: ""
-        val url = "https://www.googleapis.com/customsearch/v1?key=${apiKey.trim()}&cx=$cx&q=$encodedQuery"
+    suspend fun testSerper(apiKey: String): Result<String> {
+        val result = searchViaSerper("SEO site:linkedin.com", apiKey)
+        return if (result.isSuccess) {
+            val count = result.getOrThrow().size
+            Result.success("Serper OK: Connected and returned $count lead candidates")
+        } else {
+            Result.failure(result.exceptionOrNull() ?: Exception("Unknown Serper error"))
+        }
+    }
 
-        val request = Request.Builder()
-            .url(url)
-            .get()
-            .build()
-
-        client.newCall(request).execute().use { response ->
-            val responseBody = response.body?.string().orEmpty()
-            if (!response.isSuccessful) {
-                return Result.failure(Exception("Google CSE error ${response.code}: $responseBody"))
-            }
-
-            val json = JSONObject(responseBody)
-            val itemsArray = json.optJSONArray("items") ?: return Result.success(emptyList())
-
-            val list = mutableListOf<ProspectResult>()
-            for (i in 0 until itemsArray.length()) {
-                val item = itemsArray.getJSONObject(i)
-                val title = item.optString("title")
-                val link = item.optString("link")
-                val snippet = item.optString("snippet")
-                val platform = detectPlatform(link, title)
-
-                list.add(
-                    ProspectResult(
-                        title = title,
-                        link = link,
-                        snippet = snippet,
-                        sourcePlatform = platform,
-                        queryMatched = query
-                    )
-                )
-            }
-            return Result.success(list)
+    suspend fun testTavily(apiKey: String): Result<String> {
+        val result = searchViaTavily("SEO audit", apiKey)
+        return if (result.isSuccess) {
+            val count = result.getOrThrow().size
+            Result.success("Tavily OK: Backup search connected ($count results)")
+        } else {
+            Result.failure(result.exceptionOrNull() ?: Exception("Unknown Tavily error"))
         }
     }
 
@@ -140,11 +223,11 @@ class SearchProspectService(
             lowerLink.contains("indiehackers.com") -> "IndieHackers"
             lowerLink.contains("upwork.com") -> "Upwork"
             lowerLink.contains("facebook.com") -> "Facebook Groups"
-            else -> "Web Community"
+            else -> "Web Source"
         }
     }
 
-    private fun getFallbackProspects(query: String): List<ProspectResult> {
+    fun getFallbackProspects(query: String): List<ProspectResult> {
         return listOf(
             ProspectResult(
                 title = "Marcus Vance (Founder @ NexaGrowth): Looking for an honest technical SEO audit",
