@@ -54,7 +54,6 @@ fun AppRootContent() {
     val coroutineScope = rememberCoroutineScope()
     val credentialManager = remember { CredentialManager.create(context) }
     var user by remember { mutableStateOf(Firebase.auth.currentUser) }
-    var isCheckingAutoSignIn by remember { mutableStateOf(user == null) }
 
     DisposableEffect(Unit) {
         val listener = FirebaseAuth.AuthStateListener { auth ->
@@ -73,24 +72,14 @@ fun AppRootContent() {
                 credentialManager = credentialManager,
                 onAuthSuccess = {
                     user = Firebase.auth.currentUser
-                    isCheckingAutoSignIn = false
                 },
-                onUnauthenticated = {
-                    isCheckingAutoSignIn = false
-                },
+                onUnauthenticated = {},
                 scope = coroutineScope
             )
         }
     }
 
-    if (isCheckingAutoSignIn) {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) {
-            CircularProgressIndicator(color = CyberPrimary)
-        }
-    } else if (user == null) {
+    if (user == null) {
         AuthScreen(
             onAuthSuccess = {
                 user = Firebase.auth.currentUser

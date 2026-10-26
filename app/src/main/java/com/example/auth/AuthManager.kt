@@ -30,45 +30,60 @@ object AuthManager {
         onUnauthenticated: () -> Unit,
         scope: CoroutineScope
     ) {
-        if (Firebase.auth.currentUser != null) {
-            onAuthSuccess()
-            return
-        }
+        try {
+            if (Firebase.auth.currentUser != null) {
+                onAuthSuccess()
+                return
+            }
 
-        val clientId = try {
-            context.getString(R.string.default_web_client_id)
-        } catch (e: Exception) {
-            Log.w(TAG, "default_web_client_id string not found: ${e.message}")
-            onUnauthenticated()
-            return
-        }
+            val clientId = try {
+                context.getString(R.string.default_web_client_id)
+            } catch (e: Exception) {
+                Log.w(TAG, "default_web_client_id string not found: ${e.message}")
+                onUnauthenticated()
+                return
+            }
 
-        val googleIdOption = GetGoogleIdOption.Builder()
-            .setFilterByAuthorizedAccounts(true)
-            .setServerClientId(clientId)
-            .setAutoSelectEnabled(true)
-            .build()
+            if (clientId.isBlank()) {
+                onUnauthenticated()
+                return
+            }
 
-        val request = GetCredentialRequest.Builder()
-            .addCredentialOption(googleIdOption)
-            .build()
+            val googleIdOption = GetGoogleIdOption.Builder()
+                .setFilterByAuthorizedAccounts(true)
+                .setServerClientId(clientId)
+                .setAutoSelectEnabled(true)
+                .build()
 
-        scope.launch {
-            try {
-                val result = credentialManager.getCredential(context, request)
-                val credential = result.credential
-                if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
-                    val googleIdToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
-                    val authCredential = GoogleAuthProvider.getCredential(googleIdToken, null)
-                    Firebase.auth.signInWithCredential(authCredential).await()
-                    onAuthSuccess()
-                } else {
+            val request = GetCredentialRequest.Builder()
+                .addCredentialOption(googleIdOption)
+                .build()
+
+            scope.launch {
+                try {
+                    val activity = context as? Activity
+                    if (activity == null) {
+                        onUnauthenticated()
+                        return@launch
+                    }
+                    val result = credentialManager.getCredential(activity, request)
+                    val credential = result.credential
+                    if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
+                        val googleIdToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
+                        val authCredential = GoogleAuthProvider.getCredential(googleIdToken, null)
+                        Firebase.auth.signInWithCredential(authCredential).await()
+                        onAuthSuccess()
+                    } else {
+                        onUnauthenticated()
+                    }
+                } catch (t: Throwable) {
+                    Log.d(TAG, "Silent auto sign-in skipped: ${t.message}")
                     onUnauthenticated()
                 }
-            } catch (e: Exception) {
-                Log.d(TAG, "Silent auto sign-in skipped: ${e.message}")
-                onUnauthenticated()
             }
+        } catch (t: Throwable) {
+            Log.d(TAG, "attemptAutoSignIn skipped: ${t.message}")
+            onUnauthenticated()
         }
     }
 
