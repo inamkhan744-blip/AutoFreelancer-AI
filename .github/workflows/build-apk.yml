@@ -18,11 +18,14 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
 
-    # Yeh step khud Gradle ko set up karega, gradlew ki zaroorat nahi padegi
     - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v4
 
-    # Ab seedha gradle se build karein (./gradlew ki jagah gradle)
+    # Yeh naya step debug.keystore file bana dega
+    - name: Generate Debug Keystore
+      run: |
+        keytool -genkeypair -v -keystore debug.keystore -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+
     - name: Build Debug APK
       run: gradle assembleDebug
 
