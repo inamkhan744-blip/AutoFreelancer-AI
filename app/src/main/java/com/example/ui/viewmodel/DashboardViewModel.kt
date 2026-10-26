@@ -144,6 +144,12 @@ class DashboardViewModel(
         _currentScreen.value = screen
     }
 
+    fun refreshTasks() {
+        viewModelScope.launch {
+            repository.seedInitialTasksIfEmpty()
+        }
+    }
+
     fun saveSettings(newSettings: AppSettings) {
         settingsRepository.saveSettings(newSettings)
     }

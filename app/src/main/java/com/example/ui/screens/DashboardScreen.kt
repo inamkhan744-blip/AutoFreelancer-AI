@@ -125,7 +125,7 @@ fun DashboardScreen(
     val statusFilter by viewModel.statusFilter.collectAsState()
     val isOperationLoading by viewModel.isOperationLoading.collectAsState()
 
-    val currentUser = Firebase.auth.currentUser
+    val currentUser = runCatching { Firebase.auth.currentUser }.getOrNull()
     val userEmail = currentUser?.email ?: "Freelancer Director"
     val userName = currentUser?.displayName ?: userEmail.substringBefore("@")
 
@@ -204,8 +204,8 @@ fun DashboardScreen(
                         modifier = Modifier.testTag("sign_out_button")
                     ) {
                         Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ExitToApp,
-                            contentDescription = "Sign Out",
+                            imageVector = Icons.Default.Sync,
+                            contentDescription = "Sync / Refresh Tasks",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
