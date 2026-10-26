@@ -1,0 +1,76 @@
+{
+  "entities": {
+    "Task": {
+      "title": "Task",
+      "description": "Represents an automated AI Worker freelancing task requiring approval or monitoring.",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "The title or action name of the AI worker task."
+        },
+        "category": {
+          "type": "string",
+          "description": "The category of the task (e.g. Client Acquisition, Deliverable, Outreach, Proposal)."
+        },
+        "workerName": {
+          "type": "string",
+          "description": "The identifier of the AI worker agent assigned to this task."
+        },
+        "workerRole": {
+          "type": "string",
+          "description": "Role specialty of the AI worker (e.g. SEO Specialist, Lead Generator)."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["PENDING", "APPROVED", "RUNNING", "COMPLETED", "REJECTED"],
+          "description": "Current lifecycle status of the task."
+        },
+        "priority": {
+          "type": "string",
+          "enum": ["HIGH", "MEDIUM", "LOW"],
+          "description": "Priority tier of the task."
+        },
+        "client": {
+          "type": "string",
+          "description": "The prospective client or target platform."
+        },
+        "estimatedValue": {
+          "type": "number",
+          "description": "Estimated revenue or dollar value of the completed task."
+        },
+        "details": {
+          "type": "string",
+          "description": "Detailed execution brief and instructions."
+        },
+        "rejectionReason": {
+          "type": "string",
+          "description": "Reason provided by user if rejected."
+        },
+        "logs": {
+          "type": "array",
+          "description": "Recent execution logs or telemetry from the AI worker."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation timestamp. Must be FieldValue.serverTimestamp()."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update timestamp. Must be FieldValue.serverTimestamp()."
+        }
+      },
+      "required": ["title", "category", "workerName", "workerRole", "status", "priority", "client", "estimatedValue", "details", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/tasks/{taskId}": {
+      "schema": {
+        "$ref": "#/entities/Task"
+      },
+      "description": "AI worker tasks owned by the authenticated freelancer agency user."
+    }
+  }
+}

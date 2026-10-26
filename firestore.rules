@@ -1,0 +1,65 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidTask(data) {
+      return data.title is string && data.title.size() >= 1 && data.title.size() <= 200 &&
+             data.category is string && data.category.size() >= 1 && data.category.size() <= 100 &&
+             data.workerName is string && data.workerName.size() >= 1 && data.workerName.size() <= 100 &&
+             data.workerRole is string && data.workerRole.size() >= 1 && data.workerRole.size() <= 100 &&
+             data.status in ['PENDING', 'APPROVED', 'RUNNING', 'COMPLETED', 'REJECTED'] &&
+             data.priority in ['HIGH', 'MEDIUM', 'LOW'] &&
+             data.client is string && data.client.size() >= 1 && data.client.size() <= 100 &&
+             data.estimatedValue is number && data.estimatedValue >= 0 &&
+             data.details is string && data.details.size() <= 5000 &&
+             (!('rejectionReason' in data) || data.rejectionReason == null || (data.rejectionReason is string && data.rejectionReason.size() <= 500)) &&
+             (!('logs' in data) || data.logs == null || (data.logs is list && data.logs.size() <= 50));
+    }
+
+    match /users/{userId}/tasks/{taskId} {
+      allow get: if isSignedIn() && request.auth.uid == userId && isValidId(taskId);
+      allow list: if isSignedIn() && request.auth.uid == userId;
+
+      allow create: if isSignedIn() &&
+                       request.auth.uid == userId &&
+                       isValidId(taskId) &&
+                       incoming().keys().hasAll(['title', 'category', 'workerName', 'workerRole', 'status', 'priority', 'client', 'estimatedValue', 'details', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['title', 'category', 'workerName', 'workerRole', 'status', 'priority', 'client', 'estimatedValue', 'details', 'rejectionReason', 'logs', 'createdAt', 'updatedAt']) &&
+                       incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
+                       incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                       isValidTask(incoming());
+
+      allow update: if isSignedIn() &&
+                       request.auth.uid == userId &&
+                       isValidId(taskId) &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                       isValidTask(incoming()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['title', 'category', 'workerName', 'workerRole', 'status', 'priority', 'client', 'estimatedValue', 'details', 'rejectionReason', 'logs', 'updatedAt']);
+
+      allow delete: if isSignedIn() && request.auth.uid == userId && isValidId(taskId);
+    }
+  }
+}

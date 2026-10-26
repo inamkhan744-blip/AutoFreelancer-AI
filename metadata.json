@@ -1,0 +1,6 @@
+{
+  "name": "AutoFreelancer AI",
+  "description": "AI Worker dashboard for managing automated freelancing tasks, approvals, and real-time activity.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
