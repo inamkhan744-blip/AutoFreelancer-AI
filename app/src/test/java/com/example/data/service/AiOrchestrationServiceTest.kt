@@ -4,7 +4,12 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [36])
 class AiOrchestrationServiceTest {
 
     private val service = AiOrchestrationService()
@@ -24,7 +29,21 @@ class AiOrchestrationServiceTest {
     }
 
     @Test
-    fun generateContentWithFallback_bothKeysBlank_returnsFailure() = runBlocking {
+    fun fetchAvailableGeminiModels_blankKey_returnsFailure() = runBlocking {
+        val result = service.fetchAvailableGeminiModels("")
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull()?.message?.contains("Gemini API Key") == true)
+    }
+
+    @Test
+    fun fetchAvailableOpenRouterModels_blankKey_returnsFailure() = runBlocking {
+        val result = service.fetchAvailableOpenRouterModels("")
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull()?.message?.contains("OpenRouter API Key") == true)
+    }
+
+    @Test
+    fun generateContentWithFallback_bothKeysBlank_returnsFailureWithClearError() = runBlocking {
         val result = service.generateContentWithFallback(
             geminiApiKey = "",
             openRouterApiKey = "",
@@ -32,12 +51,14 @@ class AiOrchestrationServiceTest {
             userPrompt = "User"
         )
         assertTrue(result.isFailure)
-        assertTrue(result.exceptionOrNull()?.message?.contains("No AI API keys configured") == true)
+        val msg = result.exceptionOrNull()?.message.orEmpty()
+        assertTrue(msg.contains("Primary Gemini: Not configured"))
+        assertTrue(msg.contains("Fallback OpenRouter: Not configured"))
     }
 
     @Test
     fun verifyModelConstants_matchUserRequirements() {
-        assertEquals("gemini-1.5-flash", AiOrchestrationService.PRIMARY_GEMINI_MODEL)
-        assertEquals("deepseek/deepseek-r1:free", AiOrchestrationService.FALLBACK_OPENROUTER_MODEL)
+        assertEquals("gemini-3.8-flash", AiOrchestrationService.PRIMARY_GEMINI_MODEL)
+        assertEquals("meta-llama/llama-3.3-70b-instruct:free", AiOrchestrationService.FALLBACK_OPENROUTER_MODEL)
     }
 }

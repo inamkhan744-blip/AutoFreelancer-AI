@@ -23,12 +23,14 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.TravelExplore
@@ -39,8 +41,12 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -92,16 +98,30 @@ fun SettingsScreen(
     }
 
     val currentSettings by viewModel.settings.collectAsState()
+    val availableGeminiModels by viewModel.availableGeminiModels.collectAsState()
+    val isFetchingGeminiModels by viewModel.isFetchingGeminiModels.collectAsState()
+    val geminiModelsMessage by viewModel.geminiModelsMessage.collectAsState()
+
+    val availableOpenRouterModels by viewModel.availableOpenRouterModels.collectAsState()
+    val isFetchingOpenRouterModels by viewModel.isFetchingOpenRouterModels.collectAsState()
+    val openRouterModelsMessage by viewModel.openRouterModelsMessage.collectAsState()
+
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
     // Form inputs initialized from EncryptedSharedPreferences
     var geminiApiKey by remember(currentSettings) { mutableStateOf(currentSettings.geminiApiKey) }
     var openRouterApiKey by remember(currentSettings) { mutableStateOf(currentSettings.openRouterApiKey) }
+    var geminiModel by remember(currentSettings) { mutableStateOf(currentSettings.geminiModel) }
+    var openRouterModel by remember(currentSettings) { mutableStateOf(currentSettings.openRouterModel) }
     var serperApiKey by remember(currentSettings) { mutableStateOf(currentSettings.serperApiKey) }
     var tavilyApiKey by remember(currentSettings) { mutableStateOf(currentSettings.tavilyApiKey) }
     var searchQuery by remember(currentSettings) { mutableStateOf(currentSettings.searchQuery) }
     var autoRunOnApproval by remember(currentSettings) { mutableStateOf(currentSettings.autoRunOnApproval) }
+
+    // Dropdown toggles
+    var geminiDropdownExpanded by remember { mutableStateOf(false) }
+    var openRouterDropdownExpanded by remember { mutableStateOf(false) }
 
     // Password visibility toggles
     var showGeminiKey by remember { mutableStateOf(false) }
@@ -128,7 +148,7 @@ fun SettingsScreen(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = "Settings & API Keys",
+                            text = "Settings & AI Configuration",
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                         )
                     }
@@ -186,7 +206,7 @@ fun SettingsScreen(
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = "All API keys are encrypted using EncryptedSharedPreferences (AES-256 GCM) with Android KeyStore and persist securely across restarts.",
+                            text = "All API keys and active model preferences are encrypted using EncryptedSharedPreferences (AES-256 GCM) with Android KeyStore.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -200,7 +220,7 @@ fun SettingsScreen(
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 StatusPill(
-                    label = "Gemini AI",
+                    label = "Gemini",
                     isConfigured = geminiApiKey.isNotBlank(),
                     modifier = Modifier.weight(1f)
                 )
@@ -210,12 +230,12 @@ fun SettingsScreen(
                     modifier = Modifier.weight(1f)
                 )
                 StatusPill(
-                    label = "Serper Search",
+                    label = "Serper",
                     isConfigured = serperApiKey.isNotBlank(),
                     modifier = Modifier.weight(1f)
                 )
                 StatusPill(
-                    label = "Tavily Search",
+                    label = "Tavily",
                     isConfigured = tavilyApiKey.isNotBlank(),
                     modifier = Modifier.weight(1f)
                 )
@@ -266,7 +286,7 @@ fun SettingsScreen(
                                 )
                             }
                             Text(
-                                text = "Model: gemini-1.5-flash",
+                                text = "Active Model: $geminiModel (gemini-3.8-flash)",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -274,7 +294,7 @@ fun SettingsScreen(
                     }
 
                     Text(
-                        text = "Primary engine for generating high-impact SEO audit pitches, client outreach proposals, and actionable technical deliverables.",
+                        text = "Primary engine for generating SEO audit pitches and deliverables. Select or refresh available models directly from Google's endpoint.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -303,6 +323,141 @@ fun SettingsScreen(
                         singleLine = true
                     )
 
+                    // Gemini Model Fetch & Live Dropdown
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Gemini Model Selection:",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold
+                            )
+
+                            OutlinedButton(
+                                onClick = {
+                                    if (geminiApiKey.isBlank()) {
+                                        scope.launch {
+                                            snackbarHostState.showSnackbar("Enter a Gemini API Key first to fetch available models.")
+                                        }
+                                        return@OutlinedButton
+                                    }
+                                    viewModel.fetchAvailableGeminiModels(geminiApiKey)
+                                },
+                                enabled = !isFetchingGeminiModels,
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.testTag("fetch_gemini_models_button")
+                            ) {
+                                if (isFetchingGeminiModels) {
+                                    CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 2.dp)
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Fetching...", fontSize = 11.sp)
+                                } else {
+                                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(12.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Fetch Gemini Models", fontSize = 11.sp)
+                                }
+                            }
+                        }
+
+                        geminiModelsMessage?.let { (success, msg) ->
+                            InlineStatusBadge(success = success, message = msg)
+                        }
+
+                        // Gemini Model Dropdown
+                        val allDisplayGeminiModels = (listOf(geminiModel) + availableGeminiModels)
+                            .filter { it.isNotBlank() }
+                            .distinct()
+
+                        ExposedDropdownMenuBox(
+                            expanded = geminiDropdownExpanded,
+                            onExpandedChange = { geminiDropdownExpanded = it },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            OutlinedTextField(
+                                value = geminiModel,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("Selected Gemini Model") },
+                                trailingIcon = {
+                                    ExposedDropdownMenuDefaults.TrailingIcon(expanded = geminiDropdownExpanded)
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .menuAnchor()
+                                    .testTag("gemini_model_dropdown_field")
+                            )
+
+                            ExposedDropdownMenu(
+                                expanded = geminiDropdownExpanded,
+                                onDismissRequest = { geminiDropdownExpanded = false }
+                            ) {
+                                allDisplayGeminiModels.forEach { modelOption ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    text = modelOption,
+                                                    fontWeight = if (modelOption == geminiModel) FontWeight.Bold else FontWeight.Normal,
+                                                    color = if (modelOption == "gemini-3.8-flash") CyberPrimaryLight else MaterialTheme.colorScheme.onSurface
+                                                )
+                                                if (modelOption == "gemini-3.8-flash" || modelOption == "gemini-3.6-flash") {
+                                                    Text(
+                                                        text = "Active",
+                                                        fontSize = 10.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = CyberSuccess
+                                                    )
+                                                }
+                                            }
+                                        },
+                                        onClick = {
+                                            geminiModel = modelOption
+                                            geminiDropdownExpanded = false
+                                        },
+                                        leadingIcon = if (modelOption == geminiModel) {
+                                            {
+                                                Icon(
+                                                    imageVector = Icons.Default.Check,
+                                                    contentDescription = null,
+                                                    tint = CyberSuccess,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        } else null
+                                    )
+                                }
+                            }
+                        }
+
+                        // Quick Select Chips
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            listOf(
+                                "gemini-3.8-flash" to "gemini-3.8-flash (Recommended)",
+                                "gemini-3.6-flash" to "gemini-3.6-flash (Fast)",
+                                "gemini-2.5-flash" to "gemini-2.5-flash"
+                            ).forEach { (id, label) ->
+                                FilterChip(
+                                    selected = geminiModel == id,
+                                    onClick = { geminiModel = id },
+                                    label = { Text(label, fontSize = 11.sp) },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = CyberPrimary.copy(alpha = 0.25f)
+                                    )
+                                )
+                            }
+                        }
+                    }
+
                     // Test Gemini Connection Button & Feedback
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -317,7 +472,7 @@ fun SettingsScreen(
                                 }
                                 geminiTesting = true
                                 geminiTestResult = null
-                                viewModel.testGeminiKey(geminiApiKey) { success, msg ->
+                                viewModel.testGeminiKey(geminiApiKey, geminiModel) { success, msg ->
                                     geminiTesting = false
                                     geminiTestResult = Pair(success, msg)
                                 }
@@ -333,7 +488,7 @@ fun SettingsScreen(
                             } else {
                                 Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(14.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Test Gemini (Primary)", fontSize = 12.sp)
+                                Text("Test Gemini Connection", fontSize = 12.sp)
                             }
                         }
 
@@ -389,7 +544,7 @@ fun SettingsScreen(
                                 )
                             }
                             Text(
-                                text = "Model: deepseek/deepseek-r1:free",
+                                text = "Active Model: $openRouterModel",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -397,7 +552,7 @@ fun SettingsScreen(
                     }
 
                     Text(
-                        text = "Automatic silent fallback. If Gemini hits a rate limit, fails, or returns an empty response, the AI worker instantly switches to OpenRouter without disrupting tasks.",
+                        text = "Automatic fallback engine. If Gemini rate-limits or fails, the worker immediately tries OpenRouter and logs clear diagnostic output.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -426,6 +581,140 @@ fun SettingsScreen(
                         singleLine = true
                     )
 
+                    // OpenRouter Model Fetch & Live Dropdown
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "OpenRouter Model Selection:",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold
+                            )
+
+                            OutlinedButton(
+                                onClick = {
+                                    if (openRouterApiKey.isBlank()) {
+                                        scope.launch {
+                                            snackbarHostState.showSnackbar("Enter an OpenRouter API Key first to fetch available models.")
+                                        }
+                                        return@OutlinedButton
+                                    }
+                                    viewModel.fetchAvailableOpenRouterModels(openRouterApiKey)
+                                },
+                                enabled = !isFetchingOpenRouterModels,
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.testTag("fetch_openrouter_models_button")
+                            ) {
+                                if (isFetchingOpenRouterModels) {
+                                    CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 2.dp)
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Fetching...", fontSize = 11.sp)
+                                } else {
+                                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(12.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Fetch OpenRouter Models", fontSize = 11.sp)
+                                }
+                            }
+                        }
+
+                        openRouterModelsMessage?.let { (success, msg) ->
+                            InlineStatusBadge(success = success, message = msg)
+                        }
+
+                        // OpenRouter Model Dropdown
+                        val allDisplayOpenRouterModels = (listOf(openRouterModel) + availableOpenRouterModels)
+                            .filter { it.isNotBlank() }
+                            .distinct()
+
+                        ExposedDropdownMenuBox(
+                            expanded = openRouterDropdownExpanded,
+                            onExpandedChange = { openRouterDropdownExpanded = it },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            OutlinedTextField(
+                                value = openRouterModel,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("Selected OpenRouter Model") },
+                                trailingIcon = {
+                                    ExposedDropdownMenuDefaults.TrailingIcon(expanded = openRouterDropdownExpanded)
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .menuAnchor()
+                                    .testTag("openrouter_model_dropdown_field")
+                            )
+
+                            ExposedDropdownMenu(
+                                expanded = openRouterDropdownExpanded,
+                                onDismissRequest = { openRouterDropdownExpanded = false }
+                            ) {
+                                allDisplayOpenRouterModels.forEach { modelOption ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    text = modelOption,
+                                                    fontWeight = if (modelOption == openRouterModel) FontWeight.Bold else FontWeight.Normal,
+                                                    color = if (modelOption.endsWith(":free")) CyberSecondary else MaterialTheme.colorScheme.onSurface
+                                                )
+                                                if (modelOption.endsWith(":free")) {
+                                                    Text(
+                                                        text = "FREE",
+                                                        fontSize = 10.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = CyberSuccess
+                                                    )
+                                                }
+                                            }
+                                        },
+                                        onClick = {
+                                            openRouterModel = modelOption
+                                            openRouterDropdownExpanded = false
+                                        },
+                                        leadingIcon = if (modelOption == openRouterModel) {
+                                            {
+                                                Icon(
+                                                    imageVector = Icons.Default.Check,
+                                                    contentDescription = null,
+                                                    tint = CyberSuccess,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        } else null
+                                    )
+                                }
+                            }
+                        }
+
+                        // Quick Select Chips
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            listOf(
+                                "meta-llama/llama-3.3-70b-instruct:free" to "Llama 3.3 70B (Free)",
+                                "google/gemma-4-26b-a4b-it:free" to "Gemma 4 26B (Free)"
+                            ).forEach { (id, label) ->
+                                FilterChip(
+                                    selected = openRouterModel == id,
+                                    onClick = { openRouterModel = id },
+                                    label = { Text(label, fontSize = 11.sp) },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = CyberSecondary.copy(alpha = 0.25f)
+                                    )
+                                )
+                            }
+                        }
+                    }
+
                     // Test OpenRouter Connection Button & Feedback
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -440,7 +729,7 @@ fun SettingsScreen(
                                 }
                                 openRouterTesting = true
                                 openRouterTestResult = null
-                                viewModel.testOpenRouterKey(openRouterApiKey) { success, msg ->
+                                viewModel.testOpenRouterKey(openRouterApiKey, openRouterModel) { success, msg ->
                                     openRouterTesting = false
                                     openRouterTestResult = Pair(success, msg)
                                 }
@@ -456,7 +745,7 @@ fun SettingsScreen(
                             } else {
                                 Icon(Icons.Default.Hub, contentDescription = null, modifier = Modifier.size(14.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Test OpenRouter (Fallback)", fontSize = 12.sp)
+                                Text("Test OpenRouter Connection", fontSize = 12.sp)
                             }
                         }
 
@@ -750,6 +1039,8 @@ fun SettingsScreen(
                     val updated = AppSettings(
                         geminiApiKey = geminiApiKey.trim(),
                         openRouterApiKey = openRouterApiKey.trim(),
+                        geminiModel = geminiModel.trim(),
+                        openRouterModel = openRouterModel.trim(),
                         serperApiKey = serperApiKey.trim(),
                         tavilyApiKey = tavilyApiKey.trim(),
                         searchQuery = searchQuery.trim(),
@@ -757,7 +1048,7 @@ fun SettingsScreen(
                     )
                     viewModel.saveSettings(updated)
                     scope.launch {
-                        snackbarHostState.showSnackbar("Keys saved securely in EncryptedSharedPreferences!")
+                        snackbarHostState.showSnackbar("Settings and models saved securely in EncryptedSharedPreferences!")
                     }
                 },
                 modifier = Modifier
@@ -769,7 +1060,7 @@ fun SettingsScreen(
             ) {
                 Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Save Keys to Encrypted Storage", fontWeight = FontWeight.Bold)
+                Text("Save Keys & Models to Encrypted Storage", fontWeight = FontWeight.Bold)
             }
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -847,7 +1138,7 @@ private fun InlineStatusBadge(
         )
         Spacer(modifier = Modifier.width(4.dp))
         Text(
-            text = message.take(35),
+            text = message.take(40),
             fontSize = 11.sp,
             color = if (success) CyberSuccess else CyberError,
             fontWeight = FontWeight.Medium

@@ -85,6 +85,34 @@ class DashboardViewModel(
     private val _discoveryProgress = MutableStateFlow(LeadDiscoveryProgress())
     val discoveryProgress: StateFlow<LeadDiscoveryProgress> = _discoveryProgress.asStateFlow()
 
+    // Gemini Models state
+    private val _availableGeminiModels = MutableStateFlow<List<String>>(
+        listOf("gemini-3.8-flash", "gemini-3.6-flash", "gemini-2.5-flash")
+    )
+    val availableGeminiModels: StateFlow<List<String>> = _availableGeminiModels.asStateFlow()
+
+    private val _isFetchingGeminiModels = MutableStateFlow(false)
+    val isFetchingGeminiModels: StateFlow<Boolean> = _isFetchingGeminiModels.asStateFlow()
+
+    private val _geminiModelsMessage = MutableStateFlow<Pair<Boolean, String>?>(null)
+    val geminiModelsMessage: StateFlow<Pair<Boolean, String>?> = _geminiModelsMessage.asStateFlow()
+
+    // OpenRouter Models state
+    private val _availableOpenRouterModels = MutableStateFlow<List<String>>(
+        listOf(
+            "meta-llama/llama-3.3-70b-instruct:free",
+            "google/gemma-4-26b-a4b-it:free",
+            "mistralai/mistral-small-24b-instruct-2501:free"
+        )
+    )
+    val availableOpenRouterModels: StateFlow<List<String>> = _availableOpenRouterModels.asStateFlow()
+
+    private val _isFetchingOpenRouterModels = MutableStateFlow(false)
+    val isFetchingOpenRouterModels: StateFlow<Boolean> = _isFetchingOpenRouterModels.asStateFlow()
+
+    private val _openRouterModelsMessage = MutableStateFlow<Pair<Boolean, String>?>(null)
+    val openRouterModelsMessage: StateFlow<Pair<Boolean, String>?> = _openRouterModelsMessage.asStateFlow()
+
     val tasksUiState: StateFlow<TasksUiState> = repository.observeTasks()
         .combine(_searchQuery) { tasks, query ->
             if (query.isBlank()) tasks
@@ -181,12 +209,46 @@ class DashboardViewModel(
         _activeNotification.value = null
     }
 
+    fun fetchAvailableGeminiModels(apiKey: String) {
+        viewModelScope.launch {
+            _isFetchingGeminiModels.value = true
+            _geminiModelsMessage.value = null
+            val res = aiService.fetchAvailableGeminiModels(apiKey)
+            _isFetchingGeminiModels.value = false
+            if (res.isSuccess) {
+                val models = res.getOrThrow()
+                _availableGeminiModels.value = models
+                _geminiModelsMessage.value = Pair(true, "Found ${models.size} available Gemini models")
+            } else {
+                val err = res.exceptionOrNull()?.message ?: "Failed to query Gemini models"
+                _geminiModelsMessage.value = Pair(false, err)
+            }
+        }
+    }
+
+    fun fetchAvailableOpenRouterModels(apiKey: String) {
+        viewModelScope.launch {
+            _isFetchingOpenRouterModels.value = true
+            _openRouterModelsMessage.value = null
+            val res = aiService.fetchAvailableOpenRouterModels(apiKey)
+            _isFetchingOpenRouterModels.value = false
+            if (res.isSuccess) {
+                val models = res.getOrThrow()
+                _availableOpenRouterModels.value = models
+                _openRouterModelsMessage.value = Pair(true, "Found ${models.size} available OpenRouter models")
+            } else {
+                val err = res.exceptionOrNull()?.message ?: "Failed to query OpenRouter models"
+                _openRouterModelsMessage.value = Pair(false, err)
+            }
+        }
+    }
+
     /**
      * Executes real worker logic on task approval:
      * 1. Updates task status to APPROVED -> RUNNING.
      * 2. Shows notification that AI worker has started.
      * 3. Queries live Search API (Serper, with Tavily backup) for real client leads.
-     * 4. Passes search context to Google Gemini (with silent OpenRouter fallback) to generate a personalized outreach message and SEO audit deliverable.
+     * 4. Passes search context to Google Gemini (with OpenRouter fallback) to generate a personalized outreach message and SEO audit deliverable.
      * 5. Saves real findings and generated content into task details and logs, then marks task COMPLETED.
      */
     fun approveTask(task: Task) {
@@ -214,6 +276,8 @@ class DashboardViewModel(
                 val tavilyKey = currentConfig.tavilyApiKey
                 val geminiKey = currentConfig.geminiApiKey
                 val openRouterKey = currentConfig.openRouterApiKey
+                val geminiModel = currentConfig.geminiModel
+                val openRouterModel = currentConfig.openRouterModel
 
                 // Derive search query tailored to this task
                 val query = deriveQueryForTask(task, currentConfig.searchQuery)
@@ -245,17 +309,19 @@ class DashboardViewModel(
                     )
                 }
 
-                // AI Text Generation via Google Gemini with silent OpenRouter fallback
+                // AI Text Generation via Google Gemini with fallback to OpenRouter
                 if (geminiKey.isNotBlank() || openRouterKey.isNotBlank()) {
                     repository.updateTaskStatus(
                         taskId = task.id,
                         newStatus = "RUNNING",
-                        newLog = "Generating real deliverable using AI Engine (Gemini / OpenRouter fallback)..."
+                        newLog = "Generating deliverable using AI Engine ($geminiModel / fallback $openRouterModel)..."
                     )
 
                     val aiResult = aiService.generateTaskDeliverable(
                         geminiApiKey = geminiKey,
                         openRouterApiKey = openRouterKey,
+                        geminiModel = geminiModel,
+                        openRouterModel = openRouterModel,
                         taskTitle = task.title,
                         category = task.category,
                         client = task.client,
@@ -303,9 +369,9 @@ class DashboardViewModel(
                         repository.updateTaskStatus(
                             taskId = task.id,
                             newStatus = "RUNNING",
-                            newLog = "AI Engine error: $err"
+                            newLog = "AI Error: $err"
                         )
-                        completeWithDiscoveredLeads(task, searchResult, "AI generation failed ($err).")
+                        completeWithDiscoveredLeads(task, searchResult, "AI generation failed: $err")
                     }
                 } else {
                     // AI keys not configured
@@ -391,9 +457,10 @@ class DashboardViewModel(
         }
     }
 
-    fun testGeminiKey(key: String, onResult: (Boolean, String) -> Unit) {
+    fun testGeminiKey(key: String, model: String? = null, onResult: (Boolean, String) -> Unit) {
         viewModelScope.launch {
-            val result = aiService.testGeminiConnection(key)
+            val targetModel = model ?: settings.value.geminiModel
+            val result = aiService.testGeminiConnection(key, targetModel)
             if (result.isSuccess) {
                 onResult(true, result.getOrThrow())
             } else {
@@ -402,9 +469,10 @@ class DashboardViewModel(
         }
     }
 
-    fun testOpenRouterKey(key: String, onResult: (Boolean, String) -> Unit) {
+    fun testOpenRouterKey(key: String, model: String? = null, onResult: (Boolean, String) -> Unit) {
         viewModelScope.launch {
-            val result = aiService.testOpenRouterConnection(key)
+            val targetModel = model ?: settings.value.openRouterModel
+            val result = aiService.testOpenRouterConnection(key, targetModel)
             if (result.isSuccess) {
                 onResult(true, result.getOrThrow())
             } else {
@@ -516,6 +584,8 @@ class DashboardViewModel(
                     val aiRes = aiService.generateContentWithFallback(
                         geminiApiKey = currentConfig.geminiApiKey,
                         openRouterApiKey = currentConfig.openRouterApiKey,
+                        geminiModel = currentConfig.geminiModel,
+                        openRouterModel = currentConfig.openRouterModel,
                         systemPrompt = systemPrompt,
                         userPrompt = prompt,
                         maxTokens = 400

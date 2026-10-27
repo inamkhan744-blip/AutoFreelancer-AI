@@ -12,6 +12,8 @@ import kotlinx.coroutines.flow.asStateFlow
 data class AppSettings(
     val geminiApiKey: String = "",
     val openRouterApiKey: String = "",
+    val geminiModel: String = "gemini-3.8-flash",
+    val openRouterModel: String = "meta-llama/llama-3.3-70b-instruct:free",
     val serperApiKey: String = "",
     val tavilyApiKey: String = "",
     val searchQuery: String = "looking for SEO audit OR \"need an SEO audit\" site:linkedin.com OR site:reddit.com OR site:x.com",
@@ -58,9 +60,25 @@ class SettingsRepository(context: Context) {
     }
 
     private fun loadSettings(): AppSettings {
+        val rawGemini = securePrefs.getString("gemini_model", "gemini-3.8-flash").orEmpty()
+        val activeGemini = if (rawGemini.isBlank() || rawGemini == "gemini-1.5-flash") {
+            "gemini-3.8-flash"
+        } else {
+            rawGemini
+        }
+
+        val rawOpenRouter = securePrefs.getString("openrouter_model", "meta-llama/llama-3.3-70b-instruct:free").orEmpty()
+        val activeOpenRouter = if (rawOpenRouter.isBlank() || rawOpenRouter == "deepseek/deepseek-r1:free") {
+            "meta-llama/llama-3.3-70b-instruct:free"
+        } else {
+            rawOpenRouter
+        }
+
         return AppSettings(
             geminiApiKey = securePrefs.getString("gemini_api_key", "").orEmpty(),
             openRouterApiKey = securePrefs.getString("openrouter_api_key", "").orEmpty(),
+            geminiModel = activeGemini,
+            openRouterModel = activeOpenRouter,
             serperApiKey = securePrefs.getString("serper_api_key", "").orEmpty(),
             tavilyApiKey = securePrefs.getString("tavily_api_key", "").orEmpty(),
             searchQuery = securePrefs.getString(
@@ -76,6 +94,8 @@ class SettingsRepository(context: Context) {
         securePrefs.edit()
             .putString("gemini_api_key", settings.geminiApiKey.trim())
             .putString("openrouter_api_key", settings.openRouterApiKey.trim())
+            .putString("gemini_model", settings.geminiModel.trim())
+            .putString("openrouter_model", settings.openRouterModel.trim())
             .putString("serper_api_key", settings.serperApiKey.trim())
             .putString("tavily_api_key", settings.tavilyApiKey.trim())
             .putString("search_query", settings.searchQuery.trim())
