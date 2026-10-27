@@ -28,31 +28,23 @@ class SettingsRepositoryTest {
     @Test
     fun saveAndRetrieveApiKeys_persistsCorrectly() = runBlocking {
         val testSettings = AppSettings(
-            groqApiKey = "gsk_test_groq_key_12345",
+            geminiApiKey = "AIzaSy_test_gemini_key_12345",
+            openRouterApiKey = "sk-or-v1-test_openrouter_key_abcde",
             serperApiKey = "serper_test_key_67890",
             tavilyApiKey = "tvly_test_backup_key_abcde",
-            groqModel = "openai/gpt-oss-120b",
             searchQuery = "looking for SEO audit site:linkedin.com"
         )
 
         settingsRepository.saveSettings(testSettings)
 
         val loaded = settingsRepository.settingsFlow.first()
-        assertEquals("gsk_test_groq_key_12345", loaded.groqApiKey)
+        assertEquals("AIzaSy_test_gemini_key_12345", loaded.geminiApiKey)
+        assertEquals("sk-or-v1-test_openrouter_key_abcde", loaded.openRouterApiKey)
         assertEquals("serper_test_key_67890", loaded.serperApiKey)
         assertEquals("tvly_test_backup_key_abcde", loaded.tavilyApiKey)
-        assertEquals("openai/gpt-oss-120b", loaded.groqModel)
-        assertTrue(loaded.isGroqConfigured)
+        assertTrue(loaded.isGeminiConfigured)
+        assertTrue(loaded.isOpenRouterConfigured)
+        assertTrue(loaded.isAiConfigured)
         assertTrue(loaded.isSearchConfigured)
-    }
-
-    @Test
-    fun retiredLlamaModel_autoMigratesToGptOss120b() = runBlocking {
-        val prefs = context.getSharedPreferences("autofreelancer_secure_keys_fallback", Context.MODE_PRIVATE)
-        prefs.edit().putString("groq_model", "llama-3.3-70b-versatile").commit()
-
-        val repo = SettingsRepository(context)
-        val loaded = repo.settingsFlow.first()
-        assertEquals("openai/gpt-oss-120b", loaded.groqModel)
     }
 }

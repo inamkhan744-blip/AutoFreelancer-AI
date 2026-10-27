@@ -7,12 +7,10 @@ import com.example.data.model.Task
 import com.example.data.repository.AppSettings
 import com.example.data.repository.SettingsRepository
 import com.example.data.repository.TaskRepository
-import com.example.data.service.GeminiPitchService
+import com.example.data.service.AiOrchestrationService
 import com.example.data.service.GeneratedPitch
-import com.example.data.service.GroqApiService
 import com.example.data.service.SearchExecutionResult
 import com.example.data.service.SearchProspectService
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -55,8 +53,7 @@ class DashboardViewModel(
     private val repository: TaskRepository,
     private val settingsRepository: SettingsRepository,
     private val searchService: SearchProspectService = SearchProspectService(),
-    private val groqService: GroqApiService = GroqApiService(),
-    private val geminiPitchService: GeminiPitchService = GeminiPitchService()
+    private val aiService: AiOrchestrationService = AiOrchestrationService()
 ) : ViewModel() {
 
     private val _currentScreen = MutableStateFlow("DASHBOARD") // "DASHBOARD" or "SETTINGS"
@@ -87,22 +84,6 @@ class DashboardViewModel(
 
     private val _discoveryProgress = MutableStateFlow(LeadDiscoveryProgress())
     val discoveryProgress: StateFlow<LeadDiscoveryProgress> = _discoveryProgress.asStateFlow()
-
-    private val _availableGroqModels = MutableStateFlow<List<String>>(
-        listOf(
-            "openai/gpt-oss-120b",
-            "llama-3.1-8b-instant",
-            "mixtral-8x7b-32768",
-            "gemma2-9b-it"
-        )
-    )
-    val availableGroqModels: StateFlow<List<String>> = _availableGroqModels.asStateFlow()
-
-    private val _isFetchingModels = MutableStateFlow(false)
-    val isFetchingModels: StateFlow<Boolean> = _isFetchingModels.asStateFlow()
-
-    private val _modelsFetchMessage = MutableStateFlow<Pair<Boolean, String>?>(null)
-    val modelsFetchMessage: StateFlow<Pair<Boolean, String>?> = _modelsFetchMessage.asStateFlow()
 
     val tasksUiState: StateFlow<TasksUiState> = repository.observeTasks()
         .combine(_searchQuery) { tasks, query ->
@@ -153,7 +134,7 @@ class DashboardViewModel(
         )
 
     init {
-        // App starts with a clean state: "No tasks yet" until real data is fetched using API keys
+        // App starts with a clean, empty state ("No tasks yet" and $0.00 revenue)
     }
 
     fun navigateTo(screen: String) {
@@ -205,7 +186,7 @@ class DashboardViewModel(
      * 1. Updates task status to APPROVED -> RUNNING.
      * 2. Shows notification that AI worker has started.
      * 3. Queries live Search API (Serper, with Tavily backup) for real client leads.
-     * 4. Passes search context to Groq API to generate a personalized outreach message and SEO audit deliverable.
+     * 4. Passes search context to Google Gemini (with silent OpenRouter fallback) to generate a personalized outreach message and SEO audit deliverable.
      * 5. Saves real findings and generated content into task details and logs, then marks task COMPLETED.
      */
     fun approveTask(task: Task) {
@@ -221,7 +202,7 @@ class DashboardViewModel(
                     taskTitle = task.title
                 )
 
-                // Worker lifecycle state 1: Running
+                // Worker lifecycle state: Running
                 repository.updateTaskStatus(
                     taskId = task.id,
                     newStatus = "RUNNING",
@@ -231,8 +212,8 @@ class DashboardViewModel(
                 val currentConfig = settingsRepository.settingsFlow.value
                 val serperKey = currentConfig.serperApiKey
                 val tavilyKey = currentConfig.tavilyApiKey
-                val groqKey = currentConfig.groqApiKey
-                val groqModel = currentConfig.groqModel
+                val geminiKey = currentConfig.geminiApiKey
+                val openRouterKey = currentConfig.openRouterApiKey
 
                 // Derive search query tailored to this task
                 val query = deriveQueryForTask(task, currentConfig.searchQuery)
@@ -264,17 +245,17 @@ class DashboardViewModel(
                     )
                 }
 
-                // AI Text Generation via Groq API
-                if (groqKey.isNotBlank()) {
+                // AI Text Generation via Google Gemini with silent OpenRouter fallback
+                if (geminiKey.isNotBlank() || openRouterKey.isNotBlank()) {
                     repository.updateTaskStatus(
                         taskId = task.id,
                         newStatus = "RUNNING",
-                        newLog = "Generating real deliverable using Groq API ($groqModel)..."
+                        newLog = "Generating real deliverable using AI Engine (Gemini / OpenRouter fallback)..."
                     )
 
-                    val groqResult = groqService.generateTaskDeliverable(
-                        apiKey = groqKey,
-                        model = groqModel,
+                    val aiResult = aiService.generateTaskDeliverable(
+                        geminiApiKey = geminiKey,
+                        openRouterApiKey = openRouterKey,
                         taskTitle = task.title,
                         category = task.category,
                         client = task.client,
@@ -283,8 +264,11 @@ class DashboardViewModel(
                         leads = searchResult.leads
                     )
 
-                    if (groqResult.isSuccess) {
-                        val aiContent = groqResult.getOrThrow()
+                    if (aiResult.isSuccess) {
+                        val generation = aiResult.getOrThrow()
+                        val aiContent = generation.content
+                        val providerUsed = generation.providerUsed
+
                         val leadsFormatted = if (searchResult.leads.isNotEmpty()) {
                             searchResult.leads.mapIndexed { idx, item ->
                                 "${idx + 1}. [${item.sourcePlatform}] ${item.title}\n   URL: ${item.link}\n   Context: ${item.snippet}"
@@ -295,9 +279,9 @@ class DashboardViewModel(
 
                         val deliverableSection = """
                         |========================================
-                        |AI WORKER DELIVERABLE (Generated via Groq)
+                        |AI WORKER DELIVERABLE
                         |========================================
-                        |Model: $groqModel
+                        |Engine: $providerUsed
                         |Search Engine: ${searchResult.providerUsed}
                         |
                         |$aiContent
@@ -312,24 +296,23 @@ class DashboardViewModel(
                             taskId = task.id,
                             newStatus = "COMPLETED",
                             appendDetails = deliverableSection,
-                            newLog = "Groq AI generation complete (${aiContent.length} chars). Task deliverable finalized and saved."
+                            newLog = "AI deliverable generated via $providerUsed (${aiContent.length} chars). Finalized and saved."
                         )
                     } else {
-                        val err = groqResult.exceptionOrNull()?.message ?: "Groq call failed"
+                        val err = aiResult.exceptionOrNull()?.message ?: "AI generation failed"
                         repository.updateTaskStatus(
                             taskId = task.id,
                             newStatus = "RUNNING",
-                            newLog = "Groq error: $err"
+                            newLog = "AI Engine error: $err"
                         )
-                        // Attempt fallback to Gemini or complete with leads
-                        completeWithDiscoveredLeads(task, searchResult, "Groq generation failed ($err).")
+                        completeWithDiscoveredLeads(task, searchResult, "AI generation failed ($err).")
                     }
                 } else {
-                    // Groq key not configured
+                    // AI keys not configured
                     completeWithDiscoveredLeads(
                         task,
                         searchResult,
-                        "Notice: Groq API Key is not set in Settings. Saved discovered search leads without AI synthesis."
+                        "Notice: Gemini API Key / OpenRouter Key not configured in Settings. Saved discovered search leads without AI synthesis."
                     )
                 }
             }
@@ -361,7 +344,7 @@ class DashboardViewModel(
         |AI WORKER NOTE
         |========================================
         |$statusNote
-        |To generate automated AI proposals with GPT-OSS 120B, enter your Groq API Key in Settings.
+        |To generate automated AI proposals, enter your Gemini API Key in Settings.
         """.trimMargin()
 
         repository.updateTaskExecution(
@@ -408,36 +391,26 @@ class DashboardViewModel(
         }
     }
 
-    fun testGroqKey(key: String, onResult: (Boolean, String) -> Unit) {
+    fun testGeminiKey(key: String, onResult: (Boolean, String) -> Unit) {
         viewModelScope.launch {
-            val result = groqService.testConnection(key, settings.value.groqModel)
+            val result = aiService.testGeminiConnection(key)
             if (result.isSuccess) {
-                onResult(true, "Groq Connected! ${settings.value.groqModel} responded successfully.")
+                onResult(true, result.getOrThrow())
             } else {
-                onResult(false, result.exceptionOrNull()?.message ?: "Groq connection error")
+                onResult(false, result.exceptionOrNull()?.message ?: "Gemini connection error")
             }
         }
     }
 
-    fun refreshAvailableGroqModels(apiKey: String) {
+    fun testOpenRouterKey(key: String, onResult: (Boolean, String) -> Unit) {
         viewModelScope.launch {
-            _isFetchingModels.value = true
-            _modelsFetchMessage.value = null
-            val result = groqService.fetchAvailableModels(apiKey)
-            _isFetchingModels.value = false
+            val result = aiService.testOpenRouterConnection(key)
             if (result.isSuccess) {
-                val models = result.getOrThrow()
-                _availableGroqModels.value = models
-                _modelsFetchMessage.value = Pair(true, "Fetched ${models.size} active models from Groq API")
+                onResult(true, result.getOrThrow())
             } else {
-                val error = result.exceptionOrNull()?.message ?: "Failed to fetch Groq models"
-                _modelsFetchMessage.value = Pair(false, error)
+                onResult(false, result.exceptionOrNull()?.message ?: "OpenRouter connection error")
             }
         }
-    }
-
-    fun clearModelsFetchMessage() {
-        _modelsFetchMessage.value = null
     }
 
     fun testSerperKey(key: String, onResult: (Boolean, String) -> Unit) {
@@ -475,14 +448,14 @@ class DashboardViewModel(
         viewModelScope.launch {
             _isOperationLoading.value = true
             val newTask = Task(
-                title = title.ifBlank { "Automated Client Task" },
+                title = title.ifBlank { "Client Task" },
                 category = category.ifBlank { "Client Acquisition" },
                 workerName = workerName.ifBlank { "AutoWorker-AI" },
                 workerRole = workerRole.ifBlank { "Freelance AI Specialist" },
                 status = "PENDING",
                 priority = priority,
-                client = client.ifBlank { "New Client Prospect" },
-                estimatedValue = estimatedValue.coerceAtLeast(100.0),
+                client = client.ifBlank { "Client Prospect" },
+                estimatedValue = estimatedValue.coerceAtLeast(0.0),
                 details = details.ifBlank { "Autonomous freelancing task created by director." },
                 logs = listOf("Task queued by director in pending review state.")
             )
@@ -490,58 +463,6 @@ class DashboardViewModel(
             _isOperationLoading.value = false
             _showCreateTaskDialog.value = false
         }
-    }
-
-    fun generateRandomAiTask() {
-        val templates = listOf(
-            Triple(
-                "Delivering SEO competitor keyword matrix",
-                "Technical SEO",
-                "Analyze organic share of voice across 15 SaaS landing pages."
-            ),
-            Triple(
-                "Writing high-converting cold email sequence",
-                "Outreach",
-                "Targeting Series A founders with customized case study teasers."
-            ),
-            Triple(
-                "Designing UI wireframes proposal for fintech app",
-                "Design & UX",
-                "Comprehensive Figma mobile dashboard proposal with timeline breakdown."
-            ),
-            Triple(
-                "Auditing Core Web Vitals & PageSpeed for E-commerce",
-                "Deliverable",
-                "Identify LCP/INP render delays on 25 product detail templates."
-            ),
-            Triple(
-                "Scouting LinkedIn for CMOs needing Content Strategy",
-                "Client Acquisition",
-                "Extract 40 verified profiles and draft personalized video audit invites."
-            )
-        )
-        val sample = templates.random()
-        val workers = listOf(
-            Pair("Apollo-Scout", "Lead Generation Specialist"),
-            Pair("ReportBot-Pro", "Technical SEO Analyst"),
-            Pair("PitchCraft AI", "Proposal & Scope Architect"),
-            Pair("OutreachGenie", "Cold Outreach Agent"),
-            Pair("UX-Auditor AI", "Conversion Rate Specialist")
-        )
-        val worker = workers.random()
-        val clients = listOf("Acme Cloud Corp", "FinNova Solutions", "SkyHigh Retail", "DataStream AI", "PulseHealth")
-        val randomValue = (listOf(750, 1200, 1850, 2400, 3100, 4200).random()).toDouble()
-
-        createCustomTask(
-            title = sample.first,
-            category = sample.second,
-            workerName = worker.first,
-            workerRole = worker.second,
-            client = clients.random(),
-            estimatedValue = randomValue,
-            details = sample.third,
-            priority = listOf("HIGH", "MEDIUM", "LOW").random()
-        )
     }
 
     fun runLeadDiscovery(customQuery: String? = null) {
@@ -585,39 +506,39 @@ class DashboardViewModel(
                     stepMessage = "Formulating proposal ${index + 1}/${targetProspects.size} for ${prospect.sourcePlatform}..."
                 )
 
-                // If Groq key is present, we use Groq to formulate the pitch!
-                val pitch = if (currentConfig.groqApiKey.isNotBlank()) {
-                    val prompt = "Write a high-converting client pitch for this lead looking for an SEO audit:\nTitle: ${prospect.title}\nContext: ${prospect.snippet}\nLink: ${prospect.link}"
-                    val groqText = groqService.generateChatCompletion(
-                        apiKey = currentConfig.groqApiKey,
-                        model = currentConfig.groqModel,
-                        systemPrompt = "You are Apollo-Scout, an expert freelance SEO scout. Generate a concise proposal.",
+                val prompt = "Write a high-converting, professional, personalized client pitch for this lead looking for an SEO audit:\nTitle: ${prospect.title}\nContext: ${prospect.snippet}\nLink: ${prospect.link}"
+                val systemPrompt = "You are Apollo-Scout, an elite freelance SEO scout. Formulate a personalized outreach message with zero corporate fluff and clear actionable audit findings."
+
+                var aiText = "Saw your request for an SEO audit. We can deliver a comprehensive technical analysis."
+                var engineUsed = "Manual Template"
+
+                if (currentConfig.geminiApiKey.isNotBlank() || currentConfig.openRouterApiKey.isNotBlank()) {
+                    val aiRes = aiService.generateContentWithFallback(
+                        geminiApiKey = currentConfig.geminiApiKey,
+                        openRouterApiKey = currentConfig.openRouterApiKey,
+                        systemPrompt = systemPrompt,
                         userPrompt = prompt,
                         maxTokens = 400
-                    ).getOrDefault("Proposal ready for review.")
-
-                    GeneratedPitch(
-                        prospectNameOrCompany = prospect.sourcePlatform,
-                        subjectLine = "Personalized SEO Audit Proposal for ${prospect.title.take(30)}",
-                        personalizedPitchMessage = groqText,
-                        auditHooks = listOf("Core Web Vitals & Render Delays", "Keyword Gap & Cannibalization"),
-                        suggestedRateOrValue = 1850.0,
-                        recommendedCta = "Offer a complimentary 4-minute Loom video audit"
                     )
-                } else {
-                    geminiPitchService.generatePersonalizedPitch(prospect).getOrNull() ?: GeneratedPitch(
-                        prospectNameOrCompany = prospect.sourcePlatform,
-                        subjectLine = "SEO Audit Proposal for ${prospect.title.take(30)}",
-                        personalizedPitchMessage = "Hi there, saw your request for an SEO audit. We can provide a comprehensive technical and content review.",
-                        auditHooks = listOf("Technical SEO Audit", "Competitive Gap Analysis"),
-                        suggestedRateOrValue = 1500.0,
-                        recommendedCta = "Send complimentary video review"
-                    )
+                    if (aiRes.isSuccess) {
+                        val gen = aiRes.getOrThrow()
+                        aiText = gen.content
+                        engineUsed = gen.providerUsed
+                    }
                 }
+
+                val pitch = GeneratedPitch(
+                    prospectNameOrCompany = prospect.sourcePlatform,
+                    subjectLine = "Personalized SEO Audit Proposal for ${prospect.title.take(30)}",
+                    personalizedPitchMessage = aiText,
+                    auditHooks = listOf("Technical SEO Audit", "Competitive Gap Analysis"),
+                    suggestedRateOrValue = 0.0, // Clean pipeline, no fake dollars
+                    recommendedCta = "Offer a complimentary 4-minute Loom video audit"
+                )
 
                 generatedPitches.add(pitch)
 
-                // Add task to repository
+                // Add real discovered task to repository
                 val task = Task(
                     title = "Pitching SEO Audit to ${prospect.title.take(40)}",
                     category = "Client Acquisition",
@@ -626,7 +547,7 @@ class DashboardViewModel(
                     status = "PENDING",
                     priority = "HIGH",
                     client = "${prospect.sourcePlatform} • Lead",
-                    estimatedValue = pitch.suggestedRateOrValue,
+                    estimatedValue = 0.0,
                     details = buildString {
                         append("Subject: ${pitch.subjectLine}\n\n")
                         append("${pitch.personalizedPitchMessage}\n\n")
@@ -636,7 +557,7 @@ class DashboardViewModel(
                     },
                     logs = listOf(
                         "Discovered via ${searchResult.providerUsed} on ${prospect.sourcePlatform}",
-                        if (currentConfig.groqApiKey.isNotBlank()) "Proposal drafted via Groq ${currentConfig.groqModel}" else "Proposal drafted via AI Engine"
+                        "Proposal drafted via $engineUsed"
                     )
                 )
                 repository.createTask(task)

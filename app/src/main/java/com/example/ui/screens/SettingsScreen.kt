@@ -1,10 +1,7 @@
 package com.example.ui.screens
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,13 +23,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Psychology
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.TravelExplore
@@ -43,13 +39,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -58,7 +49,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -102,30 +92,29 @@ fun SettingsScreen(
     }
 
     val currentSettings by viewModel.settings.collectAsState()
-    val availableModels by viewModel.availableGroqModels.collectAsState()
-    val isFetchingModels by viewModel.isFetchingModels.collectAsState()
-    val modelsFetchMessage by viewModel.modelsFetchMessage.collectAsState()
-
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
     // Form inputs initialized from EncryptedSharedPreferences
-    var groqApiKey by remember(currentSettings) { mutableStateOf(currentSettings.groqApiKey) }
+    var geminiApiKey by remember(currentSettings) { mutableStateOf(currentSettings.geminiApiKey) }
+    var openRouterApiKey by remember(currentSettings) { mutableStateOf(currentSettings.openRouterApiKey) }
     var serperApiKey by remember(currentSettings) { mutableStateOf(currentSettings.serperApiKey) }
     var tavilyApiKey by remember(currentSettings) { mutableStateOf(currentSettings.tavilyApiKey) }
-    var groqModel by remember(currentSettings) { mutableStateOf(currentSettings.groqModel) }
     var searchQuery by remember(currentSettings) { mutableStateOf(currentSettings.searchQuery) }
     var autoRunOnApproval by remember(currentSettings) { mutableStateOf(currentSettings.autoRunOnApproval) }
-    var dropdownExpanded by remember { mutableStateOf(false) }
 
     // Password visibility toggles
-    var showGroqKey by remember { mutableStateOf(false) }
+    var showGeminiKey by remember { mutableStateOf(false) }
+    var showOpenRouterKey by remember { mutableStateOf(false) }
     var showSerperKey by remember { mutableStateOf(false) }
     var showTavilyKey by remember { mutableStateOf(false) }
 
     // Test connection states
-    var groqTesting by remember { mutableStateOf(false) }
-    var groqTestResult by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
+    var geminiTesting by remember { mutableStateOf(false) }
+    var geminiTestResult by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
+
+    var openRouterTesting by remember { mutableStateOf(false) }
+    var openRouterTestResult by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
 
     var serperTesting by remember { mutableStateOf(false) }
     var serperTestResult by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
@@ -208,11 +197,16 @@ fun SettingsScreen(
             // Quick Status Pills
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 StatusPill(
-                    label = "Groq AI",
-                    isConfigured = groqApiKey.isNotBlank(),
+                    label = "Gemini AI",
+                    isConfigured = geminiApiKey.isNotBlank(),
+                    modifier = Modifier.weight(1f)
+                )
+                StatusPill(
+                    label = "OpenRouter",
+                    isConfigured = openRouterApiKey.isNotBlank(),
                     modifier = Modifier.weight(1f)
                 )
                 StatusPill(
@@ -221,14 +215,137 @@ fun SettingsScreen(
                     modifier = Modifier.weight(1f)
                 )
                 StatusPill(
-                    label = "Tavily Backup",
+                    label = "Tavily Search",
                     isConfigured = tavilyApiKey.isNotBlank(),
                     modifier = Modifier.weight(1f)
                 )
             }
 
             // ==========================================
-            // 1. Groq API Key (for AI text generation)
+            // 1. Google Gemini API Key (Primary AI)
+            // ==========================================
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(CircleShape)
+                                .background(CyberPrimary.copy(alpha = 0.2f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Psychology,
+                                contentDescription = null,
+                                tint = CyberPrimary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "1. Google Gemini API Key",
+                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "PRIMARY AI",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = CyberSuccess
+                                )
+                            }
+                            Text(
+                                text = "Model: gemini-1.5-flash",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = "Primary engine for generating high-impact SEO audit pitches, client outreach proposals, and actionable technical deliverables.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    OutlinedTextField(
+                        value = geminiApiKey,
+                        onValueChange = {
+                            geminiApiKey = it
+                            geminiTestResult = null
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("gemini_api_key_input"),
+                        label = { Text("Gemini API Key") },
+                        placeholder = { Text("AIzaSy...") },
+                        visualTransformation = if (showGeminiKey) VisualTransformation.None else PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        trailingIcon = {
+                            IconButton(onClick = { showGeminiKey = !showGeminiKey }) {
+                                Icon(
+                                    imageVector = if (showGeminiKey) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                    contentDescription = "Toggle Gemini key visibility"
+                                )
+                            }
+                        },
+                        singleLine = true
+                    )
+
+                    // Test Gemini Connection Button & Feedback
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                if (geminiApiKey.isBlank()) {
+                                    geminiTestResult = Pair(false, "Please enter a Gemini API key first")
+                                    return@OutlinedButton
+                                }
+                                geminiTesting = true
+                                geminiTestResult = null
+                                viewModel.testGeminiKey(geminiApiKey) { success, msg ->
+                                    geminiTesting = false
+                                    geminiTestResult = Pair(success, msg)
+                                }
+                            },
+                            enabled = !geminiTesting && geminiApiKey.isNotBlank(),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.testTag("test_gemini_button")
+                        ) {
+                            if (geminiTesting) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Testing...", fontSize = 12.sp)
+                            } else {
+                                Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Test Gemini (Primary)", fontSize = 12.sp)
+                            }
+                        }
+
+                        geminiTestResult?.let { (success, msg) ->
+                            InlineStatusBadge(success = success, message = msg)
+                        }
+                    }
+                }
+            }
+
+            // ==========================================
+            // 2. OpenRouter API Key (Fallback AI)
             // ==========================================
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -250,7 +367,7 @@ fun SettingsScreen(
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Psychology,
+                                imageVector = Icons.Default.Hub,
                                 contentDescription = null,
                                 tint = CyberSecondary,
                                 modifier = Modifier.size(18.dp)
@@ -258,12 +375,21 @@ fun SettingsScreen(
                         }
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "2. OpenRouter API Key",
+                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "FALLBACK AI",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = CyberTertiary
+                                )
+                            }
                             Text(
-                                text = "1. Groq API Key",
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                            )
-                            Text(
-                                text = "For AI text generation (openai/gpt-oss-120b)",
+                                text = "Model: deepseek/deepseek-r1:free",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -271,188 +397,36 @@ fun SettingsScreen(
                     }
 
                     Text(
-                        text = "Used when tasks are Approved to generate tailored SEO audit pitches, client proposals, and deliverable action plans in real-time.",
+                        text = "Automatic silent fallback. If Gemini hits a rate limit, fails, or returns an empty response, the AI worker instantly switches to OpenRouter without disrupting tasks.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
                     OutlinedTextField(
-                        value = groqApiKey,
+                        value = openRouterApiKey,
                         onValueChange = {
-                            groqApiKey = it
-                            groqTestResult = null
+                            openRouterApiKey = it
+                            openRouterTestResult = null
                         },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .testTag("groq_api_key_input"),
-                        label = { Text("Groq API Key") },
-                        placeholder = { Text("e.g. gsk_...") },
-                        visualTransformation = if (showGroqKey) VisualTransformation.None else PasswordVisualTransformation(),
+                            .testTag("openrouter_api_key_input"),
+                        label = { Text("OpenRouter API Key") },
+                        placeholder = { Text("sk-or-v1-...") },
+                        visualTransformation = if (showOpenRouterKey) VisualTransformation.None else PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                         trailingIcon = {
-                            IconButton(onClick = { showGroqKey = !showGroqKey }) {
+                            IconButton(onClick = { showOpenRouterKey = !showOpenRouterKey }) {
                                 Icon(
-                                    imageVector = if (showGroqKey) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                                    contentDescription = "Toggle Groq key visibility"
+                                    imageVector = if (showOpenRouterKey) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                    contentDescription = "Toggle OpenRouter key visibility"
                                 )
                             }
                         },
                         singleLine = true
                     )
 
-                    // Groq Model Selection & Live API Refresh
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "Groq Model Selection:",
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.SemiBold
-                            )
-
-                            // Refresh Available Models Button
-                            OutlinedButton(
-                                onClick = {
-                                    if (groqApiKey.isBlank()) {
-                                        scope.launch {
-                                            snackbarHostState.showSnackbar("Please enter a Groq API key first to query live models.")
-                                        }
-                                        return@OutlinedButton
-                                    }
-                                    viewModel.refreshAvailableGroqModels(groqApiKey)
-                                },
-                                enabled = !isFetchingModels,
-                                shape = RoundedCornerShape(8.dp),
-                                modifier = Modifier.testTag("refresh_models_button")
-                            ) {
-                                if (isFetchingModels) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(14.dp),
-                                        strokeWidth = 2.dp
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Fetching Models...", fontSize = 11.sp)
-                                } else {
-                                    Icon(
-                                        imageVector = Icons.Default.Refresh,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Refresh Available Models", fontSize = 11.sp)
-                                }
-                            }
-                        }
-
-                        // Live models fetch feedback
-                        modelsFetchMessage?.let { (success, msg) ->
-                            InlineStatusBadge(success = success, message = msg)
-                        }
-
-                        // Active Model Dropdown
-                        val allDisplayModels = (listOf(groqModel) + availableModels)
-                            .filter { it.isNotBlank() }
-                            .distinct()
-
-                        ExposedDropdownMenuBox(
-                            expanded = dropdownExpanded,
-                            onExpandedChange = { dropdownExpanded = it },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            OutlinedTextField(
-                                value = groqModel,
-                                onValueChange = {},
-                                readOnly = true,
-                                label = { Text("Selected Model") },
-                                trailingIcon = {
-                                    ExposedDropdownMenuDefaults.TrailingIcon(expanded = dropdownExpanded)
-                                },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .menuAnchor()
-                                    .testTag("groq_model_dropdown_field")
-                            )
-
-                            ExposedDropdownMenu(
-                                expanded = dropdownExpanded,
-                                onDismissRequest = { dropdownExpanded = false }
-                            ) {
-                                allDisplayModels.forEach { modelOption ->
-                                    DropdownMenuItem(
-                                        text = {
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                horizontalArrangement = Arrangement.SpaceBetween,
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Text(
-                                                    text = modelOption,
-                                                    fontWeight = if (modelOption == groqModel) FontWeight.Bold else FontWeight.Normal,
-                                                    color = if (modelOption == "openai/gpt-oss-120b") CyberPrimaryLight else MaterialTheme.colorScheme.onSurface
-                                                )
-                                                if (modelOption == "openai/gpt-oss-120b") {
-                                                    Text(
-                                                        text = "Active",
-                                                        fontSize = 10.sp,
-                                                        fontWeight = FontWeight.Bold,
-                                                        color = CyberSuccess
-                                                    )
-                                                }
-                                            }
-                                        },
-                                        onClick = {
-                                            groqModel = modelOption
-                                            dropdownExpanded = false
-                                        },
-                                        leadingIcon = if (modelOption == groqModel) {
-                                            {
-                                                Icon(
-                                                    imageVector = Icons.Default.Check,
-                                                    contentDescription = null,
-                                                    tint = CyberSuccess,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
-                                            }
-                                        } else null
-                                    )
-                                }
-                            }
-                        }
-
-                        // Quick Presets
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(
-                                text = "Quick Select:",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                val presets = listOf(
-                                    "openai/gpt-oss-120b" to "GPT-OSS 120B (Active)",
-                                    "llama-3.1-8b-instant" to "LLaMA 3.1 8B (Fast)",
-                                    "mixtral-8x7b-32768" to "Mixtral 8x7B"
-                                )
-                                presets.forEach { (id, label) ->
-                                    FilterChip(
-                                        selected = groqModel == id,
-                                        onClick = { groqModel = id },
-                                        label = { Text(label, fontSize = 11.sp) },
-                                        colors = FilterChipDefaults.filterChipColors(
-                                            selectedContainerColor = CyberSecondary.copy(alpha = 0.25f)
-                                        )
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    // Test Groq Connection Button & Feedback
+                    // Test OpenRouter Connection Button & Feedback
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -460,32 +434,33 @@ fun SettingsScreen(
                     ) {
                         OutlinedButton(
                             onClick = {
-                                if (groqApiKey.isBlank()) {
-                                    groqTestResult = Pair(false, "Please enter a Groq API key first")
+                                if (openRouterApiKey.isBlank()) {
+                                    openRouterTestResult = Pair(false, "Please enter an OpenRouter API key first")
                                     return@OutlinedButton
                                 }
-                                groqTesting = true
-                                groqTestResult = null
-                                viewModel.testGroqKey(groqApiKey) { success, msg ->
-                                    groqTesting = false
-                                    groqTestResult = Pair(success, msg)
+                                openRouterTesting = true
+                                openRouterTestResult = null
+                                viewModel.testOpenRouterKey(openRouterApiKey) { success, msg ->
+                                    openRouterTesting = false
+                                    openRouterTestResult = Pair(success, msg)
                                 }
                             },
-                            enabled = !groqTesting && groqApiKey.isNotBlank(),
-                            shape = RoundedCornerShape(8.dp)
+                            enabled = !openRouterTesting && openRouterApiKey.isNotBlank(),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.testTag("test_openrouter_button")
                         ) {
-                            if (groqTesting) {
+                            if (openRouterTesting) {
                                 CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text("Testing...", fontSize = 12.sp)
                             } else {
-                                Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Icon(Icons.Default.Hub, contentDescription = null, modifier = Modifier.size(14.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Test Groq Connection", fontSize = 12.sp)
+                                Text("Test OpenRouter (Fallback)", fontSize = 12.sp)
                             }
                         }
 
-                        groqTestResult?.let { (success, msg) ->
+                        openRouterTestResult?.let { (success, msg) ->
                             InlineStatusBadge(success = success, message = msg)
                         }
                     }
@@ -493,7 +468,7 @@ fun SettingsScreen(
             }
 
             // ==========================================
-            // 2. Serper Search API Key (for finding clients)
+            // 3. Serper Search API Key
             // ==========================================
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -524,11 +499,11 @@ fun SettingsScreen(
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text(
-                                text = "2. Serper Search API Key",
+                                text = "3. Serper Search API Key",
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                             )
                             Text(
-                                text = "For finding clients on the internet (Google Search)",
+                                text = "Google Search via Serper.dev for live prospects",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -536,7 +511,7 @@ fun SettingsScreen(
                     }
 
                     Text(
-                        text = "Queries Google organically via Serper.dev to locate real businesses and founders actively seeking SEO audits on LinkedIn, Reddit, and Twitter.",
+                        text = "Queries Google organically to locate businesses and founders actively seeking SEO audits on LinkedIn, Reddit, and Twitter.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -606,7 +581,7 @@ fun SettingsScreen(
             }
 
             // ==========================================
-            // 3. Tavily Search API Key (as backup search)
+            // 4. Tavily Search API Key (Backup search)
             // ==========================================
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -637,11 +612,11 @@ fun SettingsScreen(
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text(
-                                text = "3. Tavily Search API Key",
+                                text = "4. Tavily Search API Key",
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                             )
                             Text(
-                                text = "As a backup search option (Automatic Fallback)",
+                                text = "Backup search option (Automatic Fallback)",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -664,7 +639,7 @@ fun SettingsScreen(
                             .fillMaxWidth()
                             .testTag("tavily_api_key_input"),
                         label = { Text("Tavily Search API Key") },
-                        placeholder = { Text("e.g. tvly-...") },
+                        placeholder = { Text("tvly-...") },
                         visualTransformation = if (showTavilyKey) VisualTransformation.None else PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                         trailingIcon = {
@@ -773,10 +748,10 @@ fun SettingsScreen(
             Button(
                 onClick = {
                     val updated = AppSettings(
-                        groqApiKey = groqApiKey.trim(),
+                        geminiApiKey = geminiApiKey.trim(),
+                        openRouterApiKey = openRouterApiKey.trim(),
                         serperApiKey = serperApiKey.trim(),
                         tavilyApiKey = tavilyApiKey.trim(),
-                        groqModel = groqModel.trim(),
                         searchQuery = searchQuery.trim(),
                         autoRunOnApproval = autoRunOnApproval
                     )
@@ -824,7 +799,7 @@ private fun StatusPill(
         )
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center
         ) {
@@ -832,19 +807,19 @@ private fun StatusPill(
                 imageVector = if (isConfigured) Icons.Default.CheckCircle else Icons.Default.Key,
                 contentDescription = null,
                 tint = if (isConfigured) CyberSuccess else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(14.dp)
+                modifier = Modifier.size(12.dp)
             )
-            Spacer(modifier = Modifier.width(6.dp))
+            Spacer(modifier = Modifier.width(4.dp))
             Column {
                 Text(
                     text = label,
-                    fontSize = 11.sp,
+                    fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
                     text = if (isConfigured) "Configured" else "Not set",
-                    fontSize = 9.sp,
+                    fontSize = 8.sp,
                     color = if (isConfigured) CyberSuccess else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
@@ -872,7 +847,7 @@ private fun InlineStatusBadge(
         )
         Spacer(modifier = Modifier.width(4.dp))
         Text(
-            text = message.take(30),
+            text = message.take(35),
             fontSize = 11.sp,
             color = if (success) CyberSuccess else CyberError,
             fontWeight = FontWeight.Medium

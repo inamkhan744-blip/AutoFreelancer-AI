@@ -747,7 +747,7 @@ fun TaskListContent(
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = "Configure your Groq and Search API keys in Settings, then run Lead Scout to discover live leads and generate AI audit pitches.",
+                            text = "Configure your Gemini / AI and Search API keys in Settings, then run Lead Scout to discover live leads and generate AI audit pitches.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center,
