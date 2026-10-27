@@ -137,9 +137,7 @@ class DashboardViewModel(
         )
 
     init {
-        viewModelScope.launch {
-            repository.seedInitialTasksIfEmpty()
-        }
+        // App starts with a clean state: "No tasks yet" until real data is fetched using API keys
     }
 
     fun navigateTo(screen: String) {
@@ -147,9 +145,7 @@ class DashboardViewModel(
     }
 
     fun refreshTasks() {
-        viewModelScope.launch {
-            repository.seedInitialTasksIfEmpty()
-        }
+        // Real tasks are observed reactively from repository
     }
 
     fun saveSettings(newSettings: AppSettings) {
@@ -349,7 +345,7 @@ class DashboardViewModel(
         |AI WORKER NOTE
         |========================================
         |$statusNote
-        |To generate automated AI proposals with LLaMA-3.3, enter your Groq API Key in Settings.
+        |To generate automated AI proposals with GPT-OSS 120B, enter your Groq API Key in Settings.
         """.trimMargin()
 
         repository.updateTaskExecution(
@@ -400,7 +396,7 @@ class DashboardViewModel(
         viewModelScope.launch {
             val result = groqService.testConnection(key, settings.value.groqModel)
             if (result.isSuccess) {
-                onResult(true, "Groq Connected! LLaMA model responded successfully.")
+                onResult(true, "Groq Connected! ${settings.value.groqModel} responded successfully.")
             } else {
                 onResult(false, result.exceptionOrNull()?.message ?: "Groq connection error")
             }

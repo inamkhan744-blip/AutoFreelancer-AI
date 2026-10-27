@@ -254,7 +254,7 @@ fun SettingsScreen(
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                             )
                             Text(
-                                text = "For AI text generation (LLaMA-3.3-70b)",
+                                text = "For AI text generation (openai/gpt-oss-120b)",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -303,7 +303,7 @@ fun SettingsScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             val models = listOf(
-                                "llama-3.3-70b-versatile" to "LLaMA 3.3 70B (Recommended)",
+                                "openai/gpt-oss-120b" to "GPT-OSS 120B (Recommended)",
                                 "llama-3.1-8b-instant" to "LLaMA 3.1 8B (Ultra Fast)",
                                 "mixtral-8x7b-32768" to "Mixtral 8x7B"
                             )

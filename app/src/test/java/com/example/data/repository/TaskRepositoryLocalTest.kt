@@ -35,36 +35,56 @@ class TaskRepositoryLocalTest {
     }
 
     @Test
-    fun initialLaunch_seedsSampleTasksAutomatically() = runBlocking {
+    fun initialLaunch_startsEmptyWithoutDummyData() = runBlocking {
         val tasks = repository.observeTasks().first()
-        assertTrue("Initial tasks should not be empty", tasks.isNotEmpty())
-        assertTrue("Should include LinkedIn SEO scouting task", tasks.any { it.title.contains("LinkedIn") })
-        assertTrue("Should include SEO audit report task", tasks.any { it.title.contains("SEO audit report") })
+        assertTrue("Initial tasks should be empty without dummy data", tasks.isEmpty())
     }
 
     @Test
     fun approveTask_updatesLocalTaskStatus() = runBlocking {
-        val tasks = repository.observeTasks().first()
-        val pendingTask = tasks.first { it.status == "PENDING" }
+        val testTask = Task(
+            id = "test_lead_1",
+            title = "SEO Audit for Growth Co",
+            category = "Lead",
+            workerName = "ScoutBot",
+            workerRole = "Lead Analyst",
+            status = "PENDING",
+            priority = "HIGH",
+            client = "Growth Co",
+            estimatedValue = 1500.0,
+            details = "Audit technical performance and backlink profile"
+        )
+        repository.createTask(testTask)
 
-        val result = repository.approveTask(pendingTask.id)
+        val result = repository.approveTask(testTask.id)
         assertTrue(result.isSuccess)
 
-        val updated = repository.getTaskById(pendingTask.id).getOrThrow()
+        val updated = repository.getTaskById(testTask.id).getOrThrow()
         assertEquals("APPROVED", updated.status)
         assertTrue(updated.logs.any { it.contains("Worker dispatched") })
     }
 
     @Test
     fun rejectTask_updatesStatusAndStoresReason() = runBlocking {
-        val tasks = repository.observeTasks().first()
-        val pendingTask = tasks.first { it.status == "PENDING" }
+        val testTask = Task(
+            id = "test_lead_2",
+            title = "SEO Audit for Low Budget Lead",
+            category = "Lead",
+            workerName = "ScoutBot",
+            workerRole = "Lead Analyst",
+            status = "PENDING",
+            priority = "LOW",
+            client = "SmallBiz",
+            estimatedValue = 300.0,
+            details = "Audit site"
+        )
+        repository.createTask(testTask)
 
         val reason = "Estimated budget too low"
-        val result = repository.rejectTask(pendingTask.id, reason)
+        val result = repository.rejectTask(testTask.id, reason)
         assertTrue(result.isSuccess)
 
-        val updated = repository.getTaskById(pendingTask.id).getOrThrow()
+        val updated = repository.getTaskById(testTask.id).getOrThrow()
         assertEquals("REJECTED", updated.status)
         assertEquals(reason, updated.rejectionReason)
     }

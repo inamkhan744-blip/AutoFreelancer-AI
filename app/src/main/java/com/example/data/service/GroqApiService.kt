@@ -23,7 +23,7 @@ class GroqApiService(
 
     suspend fun generateChatCompletion(
         apiKey: String,
-        model: String = "llama-3.3-70b-versatile",
+        model: String = "openai/gpt-oss-120b",
         systemPrompt: String,
         userPrompt: String,
         maxTokens: Int = 1200,
@@ -55,8 +55,14 @@ class GroqApiService(
                 )
             }
 
+            val effectiveModel = if (model.isBlank() || model == "llama-3.3-70b-versatile") {
+                "openai/gpt-oss-120b"
+            } else {
+                model
+            }
+
             val requestJson = JSONObject().apply {
-                put("model", model.ifBlank { "llama-3.3-70b-versatile" })
+                put("model", effectiveModel)
                 put("messages", messagesArray)
                 put("temperature", temperature)
                 put("max_tokens", maxTokens)
@@ -102,7 +108,7 @@ class GroqApiService(
 
     suspend fun testConnection(
         apiKey: String,
-        model: String = "llama-3.3-70b-versatile"
+        model: String = "openai/gpt-oss-120b"
     ): Result<String> {
         return generateChatCompletion(
             apiKey = apiKey,
@@ -116,7 +122,7 @@ class GroqApiService(
 
     suspend fun generateTaskDeliverable(
         apiKey: String,
-        model: String = "llama-3.3-70b-versatile",
+        model: String = "openai/gpt-oss-120b",
         taskTitle: String,
         category: String,
         client: String,

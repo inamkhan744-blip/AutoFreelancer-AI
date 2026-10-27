@@ -40,8 +40,7 @@ class TaskRepository(
     private fun loadLocalTasks() {
         val file = storageFile ?: return
         if (!file.exists()) {
-            val sampleTasks = getInitialSampleTasks()
-            saveLocalTasks(sampleTasks)
+            localTasksFlow.value = emptyList()
             return
         }
         try {
@@ -52,20 +51,25 @@ class TaskRepository(
                 for (i in 0 until jsonArr.length()) {
                     list.add(Task.fromJson(jsonArr.getJSONObject(i)))
                 }
-                if (list.isEmpty()) {
-                    val sampleTasks = getInitialSampleTasks()
-                    saveLocalTasks(sampleTasks)
-                } else {
-                    localTasksFlow.value = list
+                // Purge any legacy dummy seed tasks if present
+                val cleanList = list.filterNot {
+                    it.id.startsWith("task_init_") ||
+                    it.client.contains("Fintech & SaaS") ||
+                    it.client.contains("TechVentures") ||
+                    it.client.contains("Apex Apparel") ||
+                    it.client.contains("CloudOps") ||
+                    it.client.contains("HealthPulse")
+                }
+                localTasksFlow.value = cleanList
+                if (cleanList.size != list.size) {
+                    saveLocalTasks(cleanList)
                 }
             } else {
-                val sampleTasks = getInitialSampleTasks()
-                saveLocalTasks(sampleTasks)
+                localTasksFlow.value = emptyList()
             }
         } catch (e: Exception) {
             Log.e(tag, "Failed to load local tasks: ${e.message}", e)
-            val sampleTasks = getInitialSampleTasks()
-            saveLocalTasks(sampleTasks)
+            localTasksFlow.value = emptyList()
         }
     }
 
@@ -379,101 +383,7 @@ class TaskRepository(
     }
 
     suspend fun seedInitialTasksIfEmpty(): Result<Unit> {
-        val uid = auth?.currentUser?.uid
-        if (db != null && uid != null) {
-            val collection = db.collection("users").document(uid).collection("tasks")
-            return try {
-                val existing = collection.limit(1).get().await()
-                if (existing.isEmpty) {
-                    val sampleTasks = getInitialSampleTasks()
-                    for (task in sampleTasks) {
-                        createTask(task)
-                    }
-                }
-                Result.success(Unit)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                handleFirestoreError(e, OperationType.WRITE, "users/$uid/tasks")
-                Result.failure(e)
-            }
-        }
-
-        // Local seeding
-        if (localTasksFlow.value.isEmpty()) {
-            val sampleTasks = getInitialSampleTasks()
-            saveLocalTasks(sampleTasks)
-        }
+        // Dummy data seeding removed: app starts with empty state until real data is fetched with API keys
         return Result.success(Unit)
-    }
-
-    private fun getInitialSampleTasks(): List<Task> {
-        return listOf(
-            Task(
-                id = "task_init_1",
-                title = "Scouting for SEO clients on LinkedIn",
-                category = "Client Acquisition",
-                workerName = "Apollo-Scout",
-                workerRole = "Lead Generation Specialist",
-                status = "PENDING",
-                priority = "HIGH",
-                client = "Fintech & SaaS Series A",
-                estimatedValue = 1800.0,
-                details = "AI worker will scrape 50 marketing director profiles on LinkedIn, analyze their organic search gaps, and prepare custom pitch decks for review.",
-                logs = listOf("Target ICP identified", "Initial 50 prospect profiles gathered")
-            ),
-            Task(
-                id = "task_init_2",
-                title = "Delivering SEO audit report",
-                category = "Deliverable",
-                workerName = "ReportBot-Pro",
-                workerRole = "Technical SEO Analyst",
-                status = "PENDING",
-                priority = "HIGH",
-                client = "TechVentures Inc.",
-                estimatedValue = 2400.0,
-                details = "Full technical site audit covering Core Web Vitals, indexing bottlenecks, backlink velocity, and top 20 keyword cluster recommendations ready for client delivery.",
-                logs = listOf("Site crawl complete: 1,420 URLs indexed", "Speed analysis generated")
-            ),
-            Task(
-                id = "task_init_3",
-                title = "Generating proposal for Shopify redesign",
-                category = "Proposal",
-                workerName = "PitchCraft AI",
-                workerRole = "Proposal & Scope Architect",
-                status = "PENDING",
-                priority = "MEDIUM",
-                client = "Apex Apparel Co.",
-                estimatedValue = 3500.0,
-                details = "Created 12-page conversion rate optimization proposal detailing checkout flow improvements, headless architecture suggestions, and project milestones.",
-                logs = listOf("Client RFP parsed", "Scope breakdown formulated")
-            ),
-            Task(
-                id = "task_init_4",
-                title = "Cold email outreach sequence for B2B leads",
-                category = "Outreach",
-                workerName = "OutreachGenie",
-                workerRole = "Cold Outreach Agent",
-                status = "RUNNING",
-                priority = "MEDIUM",
-                client = "CloudOps Providers",
-                estimatedValue = 1200.0,
-                details = "Sending personalized 3-step value-first email series to verified DevOps managers. Current open rate: 64%.",
-                logs = listOf("Worker started execution", "Batch 1 sent (30 emails)", "3 replies received")
-            ),
-            Task(
-                id = "task_init_5",
-                title = "Competitor backlink gap analysis",
-                category = "Market Research",
-                workerName = "LinkIntel AI",
-                workerRole = "Off-Page SEO Agent",
-                status = "COMPLETED",
-                priority = "LOW",
-                client = "HealthPulse App",
-                estimatedValue = 950.0,
-                details = "Analyzed top 3 market competitors, discovered 42 high-DR guest blogging and citation opportunities.",
-                logs = listOf("Domain matrices extracted", "Final CSV report compiled and stored")
-            )
-        )
     }
 }

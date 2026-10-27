@@ -89,6 +89,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -261,7 +262,9 @@ fun DashboardScreen(
                                 onTaskClicked = { viewModel.selectTaskForDetail(it) },
                                 onApprove = { viewModel.approveTask(it) },
                                 onReject = { viewModel.openRejectDialog(it) },
-                                onComplete = { viewModel.completeTask(it.id) }
+                                onComplete = { viewModel.completeTask(it.id) },
+                                onScoutClicked = { viewModel.runLeadDiscovery() },
+                                onSettingsClicked = onNavigateToSettings
                             )
                         }
 
@@ -304,7 +307,9 @@ fun DashboardScreen(
                             onTaskClicked = { viewModel.selectTaskForDetail(it) },
                             onApprove = { viewModel.approveTask(it) },
                             onReject = { viewModel.openRejectDialog(it) },
-                            onComplete = { viewModel.completeTask(it.id) }
+                            onComplete = { viewModel.completeTask(it.id) },
+                            onScoutClicked = { viewModel.runLeadDiscovery() },
+                            onSettingsClicked = onNavigateToSettings
                         )
                     }
                 }
@@ -669,7 +674,9 @@ fun TaskListContent(
     onTaskClicked: (Task) -> Unit,
     onApprove: (Task) -> Unit,
     onReject: (Task) -> Unit,
-    onComplete: (Task) -> Unit
+    onComplete: (Task) -> Unit,
+    onScoutClicked: (() -> Unit)? = null,
+    onSettingsClicked: (() -> Unit)? = null
 ) {
     when (tasksState) {
         is TasksUiState.Loading -> {
@@ -714,24 +721,71 @@ fun TaskListContent(
                         .padding(32.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            imageVector = Icons.Default.Work,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(48.dp)
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Surface(
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                            modifier = Modifier.size(64.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.Work,
+                                    contentDescription = null,
+                                    tint = CyberPrimaryLight,
+                                    modifier = Modifier.size(32.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(16.dp))
                         Text(
-                            text = "No AI Worker Tasks Found",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold
+                            text = "No tasks yet",
+                            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurface
                         )
+                        Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = "Tap '+ New AI Task' or the ✨ button to simulate new worker opportunities.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            text = "Configure your Groq and Search API keys in Settings, then run Lead Scout to discover live leads and generate AI audit pitches.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(horizontal = 16.dp)
                         )
+                        Spacer(modifier = Modifier.height(20.dp))
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (onScoutClicked != null) {
+                                Button(
+                                    onClick = onScoutClicked,
+                                    colors = ButtonDefaults.buttonColors(containerColor = CyberPrimary)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Search,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Run Lead Scout")
+                                }
+                            }
+                            if (onSettingsClicked != null) {
+                                OutlinedButton(
+                                    onClick = onSettingsClicked
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Settings,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Settings")
+                                }
+                            }
+                        }
                     }
                 }
             } else {

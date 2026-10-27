@@ -13,7 +13,7 @@ data class AppSettings(
     val groqApiKey: String = "",
     val serperApiKey: String = "",
     val tavilyApiKey: String = "",
-    val groqModel: String = "llama-3.3-70b-versatile",
+    val groqModel: String = "openai/gpt-oss-120b",
     val searchQuery: String = "looking for SEO audit OR \"need an SEO audit\" site:linkedin.com OR site:reddit.com OR site:x.com",
     val emailApiKey: String = "",
     val autoRunOnApproval: Boolean = true
@@ -52,11 +52,18 @@ class SettingsRepository(context: Context) {
     }
 
     private fun loadSettings(): AppSettings {
+        val storedModel = securePrefs.getString("groq_model", "openai/gpt-oss-120b")
+        val activeModel = if (storedModel.isNullOrBlank() || storedModel == "llama-3.3-70b-versatile") {
+            "openai/gpt-oss-120b"
+        } else {
+            storedModel
+        }
+
         return AppSettings(
             groqApiKey = securePrefs.getString("groq_api_key", "").orEmpty(),
             serperApiKey = securePrefs.getString("serper_api_key", "").orEmpty(),
             tavilyApiKey = securePrefs.getString("tavily_api_key", "").orEmpty(),
-            groqModel = securePrefs.getString("groq_model", "llama-3.3-70b-versatile") ?: "llama-3.3-70b-versatile",
+            groqModel = activeModel,
             searchQuery = securePrefs.getString(
                 "search_query",
                 "looking for SEO audit OR \"need an SEO audit\" site:linkedin.com OR site:reddit.com OR site:x.com"
