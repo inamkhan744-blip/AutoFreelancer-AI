@@ -173,4 +173,71 @@ class GroqApiService(
             maxTokens = 1200
         )
     }
+
+    suspend fun fetchAvailableModels(apiKey: String): Result<List<String>> = withContext(Dispatchers.IO) {
+        if (apiKey.isBlank()) {
+            return@withContext Result.failure(
+                IllegalArgumentException("Groq API Key is not configured. Please enter your key in Settings.")
+            )
+        }
+
+        try {
+            val request = Request.Builder()
+                .url("https://api.groq.com/openai/v1/models")
+                .addHeader("Authorization", "Bearer ${apiKey.trim()}")
+                .addHeader("Content-Type", "application/json")
+                .get()
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                val body = response.body?.string().orEmpty()
+                if (!response.isSuccessful) {
+                    val errorMsg = try {
+                        val errObj = JSONObject(body).optJSONObject("error")
+                        errObj?.optString("message") ?: "HTTP ${response.code}: $body"
+                    } catch (e: Exception) {
+                        "HTTP ${response.code}: $body"
+                    }
+                    Log.e(tag, "Failed to fetch Groq models: $errorMsg")
+                    return@withContext Result.failure(Exception("Failed to fetch models ($errorMsg)"))
+                }
+
+                val jsonResponse = JSONObject(body)
+                val dataArray = jsonResponse.optJSONArray("data")
+                val modelsList = mutableListOf<String>()
+
+                if (dataArray != null) {
+                    for (i in 0 until dataArray.length()) {
+                        val item = dataArray.getJSONObject(i)
+                        val id = item.optString("id")
+                        val active = item.optBoolean("active", true)
+                        if (id.isNotBlank() && active) {
+                            modelsList.add(id)
+                        }
+                    }
+                }
+
+                if (modelsList.isEmpty()) {
+                    Result.failure(Exception("No active models found in Groq API response."))
+                } else {
+                    // Sort models prioritizing openai/gpt-oss-120b first, then other chat models
+                    val sorted = modelsList.sortedWith { a, b ->
+                        when {
+                            a == "openai/gpt-oss-120b" -> -1
+                            b == "openai/gpt-oss-120b" -> 1
+                            a.startsWith("openai/") && !b.startsWith("openai/") -> -1
+                            !a.startsWith("openai/") && b.startsWith("openai/") -> 1
+                            a.startsWith("llama-3.1") && !b.startsWith("llama-3.1") -> -1
+                            !a.startsWith("llama-3.1") && b.startsWith("llama-3.1") -> 1
+                            else -> a.compareTo(b, ignoreCase = true)
+                        }
+                    }
+                    Result.success(sorted)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(tag, "Network request to fetch Groq models failed: ${e.message}", e)
+            Result.failure(e)
+        }
+    }
 }

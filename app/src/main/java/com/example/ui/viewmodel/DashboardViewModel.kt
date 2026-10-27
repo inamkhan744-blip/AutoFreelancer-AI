@@ -88,6 +88,22 @@ class DashboardViewModel(
     private val _discoveryProgress = MutableStateFlow(LeadDiscoveryProgress())
     val discoveryProgress: StateFlow<LeadDiscoveryProgress> = _discoveryProgress.asStateFlow()
 
+    private val _availableGroqModels = MutableStateFlow<List<String>>(
+        listOf(
+            "openai/gpt-oss-120b",
+            "llama-3.1-8b-instant",
+            "mixtral-8x7b-32768",
+            "gemma2-9b-it"
+        )
+    )
+    val availableGroqModels: StateFlow<List<String>> = _availableGroqModels.asStateFlow()
+
+    private val _isFetchingModels = MutableStateFlow(false)
+    val isFetchingModels: StateFlow<Boolean> = _isFetchingModels.asStateFlow()
+
+    private val _modelsFetchMessage = MutableStateFlow<Pair<Boolean, String>?>(null)
+    val modelsFetchMessage: StateFlow<Pair<Boolean, String>?> = _modelsFetchMessage.asStateFlow()
+
     val tasksUiState: StateFlow<TasksUiState> = repository.observeTasks()
         .combine(_searchQuery) { tasks, query ->
             if (query.isBlank()) tasks
@@ -401,6 +417,27 @@ class DashboardViewModel(
                 onResult(false, result.exceptionOrNull()?.message ?: "Groq connection error")
             }
         }
+    }
+
+    fun refreshAvailableGroqModels(apiKey: String) {
+        viewModelScope.launch {
+            _isFetchingModels.value = true
+            _modelsFetchMessage.value = null
+            val result = groqService.fetchAvailableModels(apiKey)
+            _isFetchingModels.value = false
+            if (result.isSuccess) {
+                val models = result.getOrThrow()
+                _availableGroqModels.value = models
+                _modelsFetchMessage.value = Pair(true, "Fetched ${models.size} active models from Groq API")
+            } else {
+                val error = result.exceptionOrNull()?.message ?: "Failed to fetch Groq models"
+                _modelsFetchMessage.value = Pair(false, error)
+            }
+        }
+    }
+
+    fun clearModelsFetchMessage() {
+        _modelsFetchMessage.value = null
     }
 
     fun testSerperKey(key: String, onResult: (Boolean, String) -> Unit) {

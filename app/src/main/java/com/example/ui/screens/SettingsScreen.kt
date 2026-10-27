@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.TravelExplore
@@ -42,7 +43,10 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -98,6 +102,10 @@ fun SettingsScreen(
     }
 
     val currentSettings by viewModel.settings.collectAsState()
+    val availableModels by viewModel.availableGroqModels.collectAsState()
+    val isFetchingModels by viewModel.isFetchingModels.collectAsState()
+    val modelsFetchMessage by viewModel.modelsFetchMessage.collectAsState()
+
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
@@ -108,6 +116,7 @@ fun SettingsScreen(
     var groqModel by remember(currentSettings) { mutableStateOf(currentSettings.groqModel) }
     var searchQuery by remember(currentSettings) { mutableStateOf(currentSettings.searchQuery) }
     var autoRunOnApproval by remember(currentSettings) { mutableStateOf(currentSettings.autoRunOnApproval) }
+    var dropdownExpanded by remember { mutableStateOf(false) }
 
     // Password visibility toggles
     var showGroqKey by remember { mutableStateOf(false) }
@@ -291,31 +300,154 @@ fun SettingsScreen(
                         singleLine = true
                     )
 
-                    // Model Selection Chips
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(
-                            text = "Groq Model:",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    // Groq Model Selection & Live API Refresh
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Groq Model Selection:",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold
+                            )
+
+                            // Refresh Available Models Button
+                            OutlinedButton(
+                                onClick = {
+                                    if (groqApiKey.isBlank()) {
+                                        scope.launch {
+                                            snackbarHostState.showSnackbar("Please enter a Groq API key first to query live models.")
+                                        }
+                                        return@OutlinedButton
+                                    }
+                                    viewModel.refreshAvailableGroqModels(groqApiKey)
+                                },
+                                enabled = !isFetchingModels,
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.testTag("refresh_models_button")
+                            ) {
+                                if (isFetchingModels) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(14.dp),
+                                        strokeWidth = 2.dp
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Fetching Models...", fontSize = 11.sp)
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Default.Refresh,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Refresh Available Models", fontSize = 11.sp)
+                                }
+                            }
+                        }
+
+                        // Live models fetch feedback
+                        modelsFetchMessage?.let { (success, msg) ->
+                            InlineStatusBadge(success = success, message = msg)
+                        }
+
+                        // Active Model Dropdown
+                        val allDisplayModels = (listOf(groqModel) + availableModels)
+                            .filter { it.isNotBlank() }
+                            .distinct()
+
+                        ExposedDropdownMenuBox(
+                            expanded = dropdownExpanded,
+                            onExpandedChange = { dropdownExpanded = it },
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            val models = listOf(
-                                "openai/gpt-oss-120b" to "GPT-OSS 120B (Recommended)",
-                                "llama-3.1-8b-instant" to "LLaMA 3.1 8B (Ultra Fast)",
-                                "mixtral-8x7b-32768" to "Mixtral 8x7B"
+                            OutlinedTextField(
+                                value = groqModel,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("Selected Model") },
+                                trailingIcon = {
+                                    ExposedDropdownMenuDefaults.TrailingIcon(expanded = dropdownExpanded)
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .menuAnchor()
+                                    .testTag("groq_model_dropdown_field")
                             )
-                            models.forEach { (id, label) ->
-                                FilterChip(
-                                    selected = groqModel == id,
-                                    onClick = { groqModel = id },
-                                    label = { Text(label, fontSize = 11.sp) },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = CyberSecondary.copy(alpha = 0.25f)
+
+                            ExposedDropdownMenu(
+                                expanded = dropdownExpanded,
+                                onDismissRequest = { dropdownExpanded = false }
+                            ) {
+                                allDisplayModels.forEach { modelOption ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    text = modelOption,
+                                                    fontWeight = if (modelOption == groqModel) FontWeight.Bold else FontWeight.Normal,
+                                                    color = if (modelOption == "openai/gpt-oss-120b") CyberPrimaryLight else MaterialTheme.colorScheme.onSurface
+                                                )
+                                                if (modelOption == "openai/gpt-oss-120b") {
+                                                    Text(
+                                                        text = "Active",
+                                                        fontSize = 10.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = CyberSuccess
+                                                    )
+                                                }
+                                            }
+                                        },
+                                        onClick = {
+                                            groqModel = modelOption
+                                            dropdownExpanded = false
+                                        },
+                                        leadingIcon = if (modelOption == groqModel) {
+                                            {
+                                                Icon(
+                                                    imageVector = Icons.Default.Check,
+                                                    contentDescription = null,
+                                                    tint = CyberSuccess,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        } else null
                                     )
+                                }
+                            }
+                        }
+
+                        // Quick Presets
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                text = "Quick Select:",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                val presets = listOf(
+                                    "openai/gpt-oss-120b" to "GPT-OSS 120B (Active)",
+                                    "llama-3.1-8b-instant" to "LLaMA 3.1 8B (Fast)",
+                                    "mixtral-8x7b-32768" to "Mixtral 8x7B"
                                 )
+                                presets.forEach { (id, label) ->
+                                    FilterChip(
+                                        selected = groqModel == id,
+                                        onClick = { groqModel = id },
+                                        label = { Text(label, fontSize = 11.sp) },
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = CyberSecondary.copy(alpha = 0.25f)
+                                        )
+                                    )
+                                }
                             }
                         }
                     }
