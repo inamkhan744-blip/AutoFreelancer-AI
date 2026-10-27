@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.HourglassEmpty
@@ -281,7 +282,10 @@ fun DashboardScreen(
                                 onApprove = { selectedTask?.let { viewModel.approveTask(it) } },
                                 onReject = { selectedTask?.let { viewModel.openRejectDialog(it) } },
                                 onComplete = { selectedTask?.let { viewModel.completeTask(it.id) } },
-                                onClose = { viewModel.selectTaskForDetail(null) }
+                                onClose = { viewModel.selectTaskForDetail(null) },
+                                onSendEmail = { targetEmail, callback ->
+                                    selectedTask?.let { viewModel.sendTaskEmail(it, targetEmail, callback) }
+                                }
                             )
                         }
                     }
@@ -353,6 +357,10 @@ fun DashboardScreen(
                     },
                     text = {
                         selectedTask?.let { task ->
+                            var mobileRecipientEmail by remember(task.id, task.clientEmail) { mutableStateOf(task.clientEmail) }
+                            var mobileSendingEmail by remember { mutableStateOf(false) }
+                            var mobileEmailStatus by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
+
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -369,6 +377,14 @@ fun DashboardScreen(
                                     color = CyberTertiary,
                                     fontWeight = FontWeight.SemiBold
                                 )
+                                if (task.clientEmail.isNotBlank()) {
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = "Client Email: ${task.clientEmail}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = CyberSecondary
+                                    )
+                                }
                                 Spacer(modifier = Modifier.height(12.dp))
                                 Text(
                                     text = "Assigned Worker: ${task.workerName} (${task.workerRole})",
@@ -385,6 +401,73 @@ fun DashboardScreen(
                                     text = task.details,
                                     style = MaterialTheme.typography.bodyMedium
                                 )
+
+                                Spacer(modifier = Modifier.height(16.dp))
+
+                                // Resend Email Dispatch Section
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                                ) {
+                                    Column(modifier = Modifier.padding(12.dp)) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Icon(Icons.Default.Email, contentDescription = null, tint = CyberTertiary, modifier = Modifier.size(16.dp))
+                                            Text("Send Proposal via Email (Resend)", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold))
+                                        }
+
+                                        Spacer(modifier = Modifier.height(8.dp))
+
+                                        OutlinedTextField(
+                                            value = mobileRecipientEmail,
+                                            onValueChange = { mobileRecipientEmail = it },
+                                            label = { Text("Recipient Email") },
+                                            placeholder = { Text("client@example.com") },
+                                            modifier = Modifier.fillMaxWidth().testTag("mobile_recipient_email_input"),
+                                            singleLine = true
+                                        )
+
+                                        Spacer(modifier = Modifier.height(8.dp))
+
+                                        Button(
+                                            onClick = {
+                                                if (mobileRecipientEmail.isNotBlank()) {
+                                                    mobileSendingEmail = true
+                                                    mobileEmailStatus = null
+                                                    viewModel.sendTaskEmail(task, mobileRecipientEmail) { success, msg ->
+                                                        mobileSendingEmail = false
+                                                        mobileEmailStatus = Pair(success, msg)
+                                                    }
+                                                }
+                                            },
+                                            modifier = Modifier.fillMaxWidth().testTag("send_email_button"),
+                                            enabled = !mobileSendingEmail && mobileRecipientEmail.isNotBlank(),
+                                            colors = ButtonDefaults.buttonColors(containerColor = CyberTertiary)
+                                        ) {
+                                            if (mobileSendingEmail) {
+                                                CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text("Sending Email...")
+                                            } else {
+                                                Icon(Icons.Default.Email, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text("Send Email")
+                                            }
+                                        }
+
+                                        mobileEmailStatus?.let { (success, msg) ->
+                                            Spacer(modifier = Modifier.height(6.dp))
+                                            Text(
+                                                text = msg,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = if (success) CyberTertiary else CyberError
+                                            )
+                                        }
+                                    }
+                                }
 
                                 if (task.logs.isNotEmpty()) {
                                     Spacer(modifier = Modifier.height(14.dp))
@@ -432,8 +515,8 @@ fun DashboardScreen(
     if (showCreateDialog) {
         CreateTaskDialog(
             onDismiss = { viewModel.closeCreateTaskDialog() },
-            onSubmit = { title, category, worker, role, client, value, details, priority ->
-                viewModel.createCustomTask(title, category, worker, role, client, value, details, priority)
+            onSubmit = { title, category, worker, role, client, clientEmail, value, details, priority ->
+                viewModel.createCustomTask(title, category, worker, role, client, clientEmail, value, details, priority)
             }
         )
     }
@@ -867,6 +950,15 @@ fun TaskItemCard(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    if (task.clientEmail.isNotBlank()) {
+                        Text(
+                            text = "• ✉ ${task.clientEmail}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = CyberSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
 
                 StatusBadge(status = task.status)
@@ -1097,7 +1189,8 @@ fun TaskDetailPane(
     onApprove: () -> Unit,
     onReject: () -> Unit,
     onComplete: () -> Unit,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    onSendEmail: ((targetEmail: String, onResult: (Boolean, String) -> Unit) -> Unit)? = null
 ) {
     if (task == null) {
         Box(
@@ -1159,6 +1252,15 @@ fun TaskDetailPane(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
+            if (task.clientEmail.isNotBlank()) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "Client Email: ${task.clientEmail}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = CyberSecondary
+                )
+            }
+
             Spacer(modifier = Modifier.height(16.dp))
 
             Card(
@@ -1196,6 +1298,94 @@ fun TaskDetailPane(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurface
             )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Resend Email Dispatch Section
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                )
+            ) {
+                var recipientEmail by remember(task.id, task.clientEmail) { mutableStateOf(task.clientEmail) }
+                var isSendingEmail by remember { mutableStateOf(false) }
+                var emailStatusMessage by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
+
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(Icons.Default.Email, contentDescription = null, tint = CyberTertiary, modifier = Modifier.size(18.dp))
+                        Text(
+                            text = "Client Proposal Email (Resend API)",
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    OutlinedTextField(
+                        value = recipientEmail,
+                        onValueChange = { recipientEmail = it },
+                        label = { Text("Recipient Email") },
+                        placeholder = { Text("client@example.com (or delivered@resend.dev)") },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("recipient_email_input"),
+                        singleLine = true
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Button(
+                            onClick = {
+                                if (recipientEmail.isNotBlank() && onSendEmail != null) {
+                                    isSendingEmail = true
+                                    emailStatusMessage = null
+                                    onSendEmail(recipientEmail) { success, msg ->
+                                        isSendingEmail = false
+                                        emailStatusMessage = Pair(success, msg)
+                                    }
+                                }
+                            },
+                            modifier = Modifier.testTag("send_email_button"),
+                            enabled = !isSendingEmail && recipientEmail.isNotBlank() && onSendEmail != null,
+                            colors = ButtonDefaults.buttonColors(containerColor = CyberTertiary)
+                        ) {
+                            if (isSendingEmail) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    color = Color.White,
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Sending...")
+                            } else {
+                                Icon(Icons.Default.Email, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Send Email")
+                            }
+                        }
+                    }
+
+                    emailStatusMessage?.let { (success, msg) ->
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = msg,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (success) CyberTertiary else CyberError
+                        )
+                    }
+                }
+            }
 
             if (task.logs.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(20.dp))
@@ -1352,6 +1542,7 @@ fun CreateTaskDialog(
         worker: String,
         role: String,
         client: String,
+        clientEmail: String,
         value: Double,
         details: String,
         priority: String
@@ -1362,6 +1553,7 @@ fun CreateTaskDialog(
     var workerName by remember { mutableStateOf("Apollo-Scout") }
     var workerRole by remember { mutableStateOf("Lead Generation Specialist") }
     var client by remember { mutableStateOf("") }
+    var clientEmail by remember { mutableStateOf("") }
     var estimatedValueStr by remember { mutableStateOf("1500") }
     var details by remember { mutableStateOf("") }
     var priority by remember { mutableStateOf("HIGH") }
@@ -1382,6 +1574,7 @@ fun CreateTaskDialog(
                     workerName = "ReportBot-Pro"
                     workerRole = "Technical SEO Analyst"
                     client = "NordicSaaS Inc."
+                    clientEmail = "contact@nordicsaas.example"
                     estimatedValueStr = "2800"
                     details = "Audit sitemap indexation, crawl errors, high-intent backlink opportunities and site speed."
                     priority = "HIGH"
@@ -1411,6 +1604,17 @@ fun CreateTaskDialog(
                     label = { Text("Client / Target *") },
                     placeholder = { Text("e.g. Series A Tech Startups") },
                     modifier = Modifier.fillMaxWidth()
+                )
+
+                OutlinedTextField(
+                    value = clientEmail,
+                    onValueChange = { clientEmail = it },
+                    label = { Text("Client Email (Optional)") },
+                    placeholder = { Text("e.g. contact@clientcompany.com") },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("client_email_input"),
+                    singleLine = true
                 )
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1458,7 +1662,7 @@ fun CreateTaskDialog(
                 onClick = {
                     if (title.isNotBlank()) {
                         val value = estimatedValueStr.toDoubleOrNull() ?: 1000.0
-                        onSubmit(title, category, workerName, workerRole, client, value, details, priority)
+                        onSubmit(title, category, workerName, workerRole, client, clientEmail, value, details, priority)
                     }
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = CyberPrimary)

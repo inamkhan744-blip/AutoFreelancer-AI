@@ -18,6 +18,7 @@ data class Task(
     val status: String = "PENDING", // PENDING, APPROVED, RUNNING, COMPLETED, REJECTED
     val priority: String = "MEDIUM", // HIGH, MEDIUM, LOW
     val client: String = "",
+    val clientEmail: String = "",
     val estimatedValue: Double = 0.0,
     val details: String = "",
     val rejectionReason: String? = null,
@@ -34,6 +35,7 @@ data class Task(
             "status" to status,
             "priority" to priority,
             "client" to client,
+            "clientEmail" to clientEmail,
             "estimatedValue" to estimatedValue,
             "details" to details,
             "rejectionReason" to rejectionReason,
@@ -53,6 +55,7 @@ data class Task(
         json.put("status", status)
         json.put("priority", priority)
         json.put("client", client)
+        json.put("clientEmail", clientEmail)
         json.put("estimatedValue", estimatedValue)
         json.put("details", details)
         if (rejectionReason != null) json.put("rejectionReason", rejectionReason)
@@ -87,6 +90,7 @@ data class Task(
                 status = json.optString("status", "PENDING"),
                 priority = json.optString("priority", "MEDIUM"),
                 client = json.optString("client", ""),
+                clientEmail = json.optString("clientEmail", ""),
                 estimatedValue = json.optDouble("estimatedValue", 0.0),
                 details = json.optString("details", ""),
                 rejectionReason = if (json.has("rejectionReason")) json.optString("rejectionReason") else null,

@@ -9,6 +9,7 @@ import com.example.data.repository.SettingsRepository
 import com.example.data.repository.TaskRepository
 import com.example.data.service.AiOrchestrationService
 import com.example.data.service.GeneratedPitch
+import com.example.data.service.ResendEmailService
 import com.example.data.service.SearchExecutionResult
 import com.example.data.service.SearchProspectService
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -53,7 +54,8 @@ class DashboardViewModel(
     private val repository: TaskRepository,
     private val settingsRepository: SettingsRepository,
     private val searchService: SearchProspectService = SearchProspectService(),
-    private val aiService: AiOrchestrationService = AiOrchestrationService()
+    private val aiService: AiOrchestrationService = AiOrchestrationService(),
+    private val emailService: ResendEmailService = ResendEmailService()
 ) : ViewModel() {
 
     private val _currentScreen = MutableStateFlow("DASHBOARD") // "DASHBOARD" or "SETTINGS"
@@ -119,6 +121,7 @@ class DashboardViewModel(
             else tasks.filter {
                 it.title.contains(query, ignoreCase = true) ||
                 it.client.contains(query, ignoreCase = true) ||
+                it.clientEmail.contains(query, ignoreCase = true) ||
                 it.workerName.contains(query, ignoreCase = true) ||
                 it.category.contains(query, ignoreCase = true)
             }
@@ -249,7 +252,8 @@ class DashboardViewModel(
      * 2. Shows notification that AI worker has started.
      * 3. Queries live Search API (Serper, with Tavily backup) for real client leads.
      * 4. Passes search context to Google Gemini (with OpenRouter fallback) to generate a personalized outreach message and SEO audit deliverable.
-     * 5. Saves real findings and generated content into task details and logs, then marks task COMPLETED.
+     * 5. Saves real findings and generated content into task details, marks task COMPLETED.
+     * 6. Automatically dispatches the generated proposal via Resend API to the client's email if available and Resend is configured.
      */
     fun approveTask(task: Task) {
         viewModelScope.launch {
@@ -278,6 +282,7 @@ class DashboardViewModel(
                 val openRouterKey = currentConfig.openRouterApiKey
                 val geminiModel = currentConfig.geminiModel
                 val openRouterModel = currentConfig.openRouterModel
+                val resendKey = currentConfig.resendApiKey
 
                 // Derive search query tailored to this task
                 val query = deriveQueryForTask(task, currentConfig.searchQuery)
@@ -364,6 +369,58 @@ class DashboardViewModel(
                             appendDetails = deliverableSection,
                             newLog = "AI deliverable generated via $providerUsed (${aiContent.length} chars). Finalized and saved."
                         )
+
+                        // 3. Resend Email Dispatch on Task Completion
+                        val targetEmail = task.clientEmail.trim().ifBlank {
+                            // Extract email from discovered search leads snippet/title if present
+                            val emailRegex = Regex("[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}")
+                            searchResult.leads.mapNotNull {
+                                emailRegex.find(it.snippet)?.value ?: emailRegex.find(it.title)?.value
+                            }.firstOrNull().orEmpty()
+                        }
+
+                        if (resendKey.isNotBlank()) {
+                            if (targetEmail.isNotBlank()) {
+                                repository.updateTaskStatus(
+                                    taskId = task.id,
+                                    newStatus = "COMPLETED",
+                                    newLog = "Dispatching proposal email via Resend to $targetEmail..."
+                                )
+                                val emailRes = emailService.sendEmail(
+                                    apiKey = resendKey,
+                                    toEmail = targetEmail,
+                                    subject = "SEO Audit & Growth Proposal: ${task.title}",
+                                    bodyText = aiContent
+                                )
+                                if (emailRes.isSuccess) {
+                                    val sent = emailRes.getOrThrow()
+                                    repository.updateTaskStatus(
+                                        taskId = task.id,
+                                        newStatus = "COMPLETED",
+                                        newLog = "Proposal emailed to $targetEmail via Resend (ID: ${sent.emailId})"
+                                    )
+                                } else {
+                                    val err = emailRes.exceptionOrNull()?.message ?: "Unknown delivery error"
+                                    repository.updateTaskStatus(
+                                        taskId = task.id,
+                                        newStatus = "COMPLETED",
+                                        newLog = "Resend auto-dispatch error: $err"
+                                    )
+                                }
+                            } else {
+                                repository.updateTaskStatus(
+                                    taskId = task.id,
+                                    newStatus = "COMPLETED",
+                                    newLog = "Proposal ready. No recipient email specified yet — click 'Send Email' in task details to dispatch."
+                                )
+                            }
+                        } else {
+                            repository.updateTaskStatus(
+                                taskId = task.id,
+                                newStatus = "COMPLETED",
+                                newLog = "Proposal ready. Add a Resend API Key in Settings to enable automated email dispatch."
+                            )
+                        }
                     } else {
                         val err = aiResult.exceptionOrNull()?.message ?: "AI generation failed"
                         repository.updateTaskStatus(
@@ -381,6 +438,79 @@ class DashboardViewModel(
                         "Notice: Gemini API Key / OpenRouter Key not configured in Settings. Saved discovered search leads without AI synthesis."
                     )
                 }
+            }
+        }
+    }
+
+    /**
+     * Manually dispatches the task's proposal to the specified recipient via Resend API.
+     */
+    fun sendTaskEmail(
+        task: Task,
+        recipientEmail: String,
+        onResult: (Boolean, String) -> Unit
+    ) {
+        viewModelScope.launch {
+            val currentConfig = settingsRepository.settingsFlow.value
+            val resendKey = currentConfig.resendApiKey
+
+            if (resendKey.isBlank()) {
+                onResult(false, "Please configure your Resend API Key in Settings first.")
+                return@launch
+            }
+
+            val target = recipientEmail.trim().ifBlank { task.clientEmail.trim() }
+            if (target.isBlank()) {
+                onResult(false, "Please enter a valid recipient email address.")
+                return@launch
+            }
+
+            val contentToSend = if (task.details.isNotBlank()) {
+                task.details
+            } else {
+                "SEO Audit Proposal for ${task.title}\n\nClient: ${task.client}\nCategory: ${task.category}"
+            }
+
+            repository.updateTaskStatus(
+                taskId = task.id,
+                newStatus = task.status,
+                newLog = "Manually sending proposal email via Resend to $target..."
+            )
+
+            val result = emailService.sendEmail(
+                apiKey = resendKey,
+                toEmail = target,
+                subject = "SEO Audit & Growth Proposal: ${task.title}",
+                bodyText = contentToSend
+            )
+
+            if (result.isSuccess) {
+                val sent = result.getOrThrow()
+                repository.updateTaskStatus(
+                    taskId = task.id,
+                    newStatus = task.status,
+                    newLog = "Proposal emailed to $target via Resend (ID: ${sent.emailId})"
+                )
+                onResult(true, "Proposal sent to $target successfully (ID: ${sent.emailId.take(8)}...)")
+            } else {
+                val err = result.exceptionOrNull()?.message ?: "Failed to deliver email"
+                repository.updateTaskStatus(
+                    taskId = task.id,
+                    newStatus = task.status,
+                    newLog = "Resend delivery failed: $err"
+                )
+                onResult(false, "Failed to send email: $err")
+            }
+        }
+    }
+
+    fun testResendKey(key: String, testEmail: String? = null, onResult: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            val result = emailService.testConnection(key, testEmail)
+            if (result.isSuccess) {
+                onResult(true, result.getOrThrow())
+            } else {
+                onResult(false, result.exceptionOrNull()?.message ?: "Resend connection error")
             }
         }
     }
@@ -509,6 +639,7 @@ class DashboardViewModel(
         workerName: String,
         workerRole: String,
         client: String,
+        clientEmail: String = "",
         estimatedValue: Double,
         details: String,
         priority: String = "MEDIUM"
@@ -523,6 +654,7 @@ class DashboardViewModel(
                 status = "PENDING",
                 priority = priority,
                 client = client.ifBlank { "Client Prospect" },
+                clientEmail = clientEmail.trim(),
                 estimatedValue = estimatedValue.coerceAtLeast(0.0),
                 details = details.ifBlank { "Autonomous freelancing task created by director." },
                 logs = listOf("Task queued by director in pending review state.")
@@ -608,6 +740,12 @@ class DashboardViewModel(
 
                 generatedPitches.add(pitch)
 
+                // Check if lead snippet/link has an email
+                val emailRegex = Regex("[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}")
+                val discoveredEmail = emailRegex.find(prospect.snippet)?.value
+                    ?: emailRegex.find(prospect.title)?.value
+                    ?: ""
+
                 // Add real discovered task to repository
                 val task = Task(
                     title = "Pitching SEO Audit to ${prospect.title.take(40)}",
@@ -617,6 +755,7 @@ class DashboardViewModel(
                     status = "PENDING",
                     priority = "HIGH",
                     client = "${prospect.sourcePlatform} • Lead",
+                    clientEmail = discoveredEmail,
                     estimatedValue = 0.0,
                     details = buildString {
                         append("Subject: ${pitch.subjectLine}\n\n")

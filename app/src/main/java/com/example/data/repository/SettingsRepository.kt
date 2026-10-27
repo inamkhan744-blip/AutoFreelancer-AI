@@ -16,8 +16,8 @@ data class AppSettings(
     val openRouterModel: String = "meta-llama/llama-3.3-70b-instruct:free",
     val serperApiKey: String = "",
     val tavilyApiKey: String = "",
+    val resendApiKey: String = "",
     val searchQuery: String = "looking for SEO audit OR \"need an SEO audit\" site:linkedin.com OR site:reddit.com OR site:x.com",
-    val emailApiKey: String = "",
     val autoRunOnApproval: Boolean = true
 ) {
     val isGeminiConfigured: Boolean
@@ -31,6 +31,9 @@ data class AppSettings(
 
     val isSearchConfigured: Boolean
         get() = serperApiKey.isNotBlank() || tavilyApiKey.isNotBlank()
+
+    val isResendConfigured: Boolean
+        get() = resendApiKey.isNotBlank()
 }
 
 class SettingsRepository(context: Context) {
@@ -74,6 +77,9 @@ class SettingsRepository(context: Context) {
             rawOpenRouter
         }
 
+        val storedResend = securePrefs.getString("resend_api_key", null)
+            ?: securePrefs.getString("email_api_key", "").orEmpty()
+
         return AppSettings(
             geminiApiKey = securePrefs.getString("gemini_api_key", "").orEmpty(),
             openRouterApiKey = securePrefs.getString("openrouter_api_key", "").orEmpty(),
@@ -81,11 +87,11 @@ class SettingsRepository(context: Context) {
             openRouterModel = activeOpenRouter,
             serperApiKey = securePrefs.getString("serper_api_key", "").orEmpty(),
             tavilyApiKey = securePrefs.getString("tavily_api_key", "").orEmpty(),
+            resendApiKey = storedResend,
             searchQuery = securePrefs.getString(
                 "search_query",
                 "looking for SEO audit OR \"need an SEO audit\" site:linkedin.com OR site:reddit.com OR site:x.com"
             ) ?: "looking for SEO audit",
-            emailApiKey = securePrefs.getString("email_api_key", "").orEmpty(),
             autoRunOnApproval = securePrefs.getBoolean("auto_run_approval", true)
         )
     }
@@ -98,8 +104,9 @@ class SettingsRepository(context: Context) {
             .putString("openrouter_model", settings.openRouterModel.trim())
             .putString("serper_api_key", settings.serperApiKey.trim())
             .putString("tavily_api_key", settings.tavilyApiKey.trim())
+            .putString("resend_api_key", settings.resendApiKey.trim())
+            .putString("email_api_key", settings.resendApiKey.trim())
             .putString("search_query", settings.searchQuery.trim())
-            .putString("email_api_key", settings.emailApiKey.trim())
             .putBoolean("auto_run_approval", settings.autoRunOnApproval)
             .remove("groq_api_key")
             .remove("groq_model")

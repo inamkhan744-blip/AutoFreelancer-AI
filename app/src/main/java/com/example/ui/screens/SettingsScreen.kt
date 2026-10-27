@@ -25,6 +25,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Key
@@ -33,6 +34,7 @@ import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.TravelExplore
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -114,6 +116,7 @@ fun SettingsScreen(
     var openRouterApiKey by remember(currentSettings) { mutableStateOf(currentSettings.openRouterApiKey) }
     var geminiModel by remember(currentSettings) { mutableStateOf(currentSettings.geminiModel) }
     var openRouterModel by remember(currentSettings) { mutableStateOf(currentSettings.openRouterModel) }
+    var resendApiKey by remember(currentSettings) { mutableStateOf(currentSettings.resendApiKey) }
     var serperApiKey by remember(currentSettings) { mutableStateOf(currentSettings.serperApiKey) }
     var tavilyApiKey by remember(currentSettings) { mutableStateOf(currentSettings.tavilyApiKey) }
     var searchQuery by remember(currentSettings) { mutableStateOf(currentSettings.searchQuery) }
@@ -126,6 +129,7 @@ fun SettingsScreen(
     // Password visibility toggles
     var showGeminiKey by remember { mutableStateOf(false) }
     var showOpenRouterKey by remember { mutableStateOf(false) }
+    var showResendKey by remember { mutableStateOf(false) }
     var showSerperKey by remember { mutableStateOf(false) }
     var showTavilyKey by remember { mutableStateOf(false) }
 
@@ -135,6 +139,9 @@ fun SettingsScreen(
 
     var openRouterTesting by remember { mutableStateOf(false) }
     var openRouterTestResult by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
+
+    var resendTesting by remember { mutableStateOf(false) }
+    var resendTestResult by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
 
     var serperTesting by remember { mutableStateOf(false) }
     var serperTestResult by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
@@ -148,7 +155,7 @@ fun SettingsScreen(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = "Settings & AI Configuration",
+                            text = "Settings & API Keys",
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                         )
                     }
@@ -206,7 +213,7 @@ fun SettingsScreen(
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = "All API keys and active model preferences are encrypted using EncryptedSharedPreferences (AES-256 GCM) with Android KeyStore.",
+                            text = "All API keys (Gemini, OpenRouter, Resend, Serper, Tavily) are encrypted using EncryptedSharedPreferences (AES-256 GCM) with Android KeyStore.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -220,7 +227,7 @@ fun SettingsScreen(
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 StatusPill(
-                    label = "Gemini",
+                    label = "Gemini AI",
                     isConfigured = geminiApiKey.isNotBlank(),
                     modifier = Modifier.weight(1f)
                 )
@@ -230,13 +237,13 @@ fun SettingsScreen(
                     modifier = Modifier.weight(1f)
                 )
                 StatusPill(
-                    label = "Serper",
-                    isConfigured = serperApiKey.isNotBlank(),
+                    label = "Resend Email",
+                    isConfigured = resendApiKey.isNotBlank(),
                     modifier = Modifier.weight(1f)
                 )
                 StatusPill(
-                    label = "Tavily",
-                    isConfigured = tavilyApiKey.isNotBlank(),
+                    label = "Search API",
+                    isConfigured = serperApiKey.isNotBlank() || tavilyApiKey.isNotBlank(),
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -757,7 +764,130 @@ fun SettingsScreen(
             }
 
             // ==========================================
-            // 3. Serper Search API Key
+            // 3. Resend API Key (Email Dispatch)
+            // ==========================================
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(CircleShape)
+                                .background(CyberPrimaryLight.copy(alpha = 0.2f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Email,
+                                contentDescription = null,
+                                tint = CyberPrimaryLight,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "3. Resend API Key",
+                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "EMAIL DISPATCH",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = CyberPrimaryLight
+                                )
+                            }
+                            Text(
+                                text = "Free email delivery API (resend.com)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = "When tasks complete, the generated Gemini proposal is automatically emailed to the client address, or sent manually via 'Send Email' in task details.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    OutlinedTextField(
+                        value = resendApiKey,
+                        onValueChange = {
+                            resendApiKey = it
+                            resendTestResult = null
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("resend_api_key_input"),
+                        label = { Text("Resend API Key") },
+                        placeholder = { Text("re_...") },
+                        visualTransformation = if (showResendKey) VisualTransformation.None else PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        trailingIcon = {
+                            IconButton(onClick = { showResendKey = !showResendKey }) {
+                                Icon(
+                                    imageVector = if (showResendKey) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                    contentDescription = "Toggle Resend key visibility"
+                                )
+                            }
+                        },
+                        singleLine = true
+                    )
+
+                    // Test Resend Connection Button & Feedback
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                if (resendApiKey.isBlank()) {
+                                    resendTestResult = Pair(false, "Please enter a Resend API key first")
+                                    return@OutlinedButton
+                                }
+                                resendTesting = true
+                                resendTestResult = null
+                                viewModel.testResendKey(resendApiKey) { success, msg ->
+                                    resendTesting = false
+                                    resendTestResult = Pair(success, msg)
+                                }
+                            },
+                            enabled = !resendTesting && resendApiKey.isNotBlank(),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.testTag("test_resend_button")
+                        ) {
+                            if (resendTesting) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Testing...", fontSize = 12.sp)
+                            } else {
+                                Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Test Resend Connection", fontSize = 12.sp)
+                            }
+                        }
+
+                        resendTestResult?.let { (success, msg) ->
+                            InlineStatusBadge(success = success, message = msg)
+                        }
+                    }
+                }
+            }
+
+            // ==========================================
+            // 4. Serper Search API Key
             // ==========================================
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -788,7 +918,7 @@ fun SettingsScreen(
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text(
-                                text = "3. Serper Search API Key",
+                                text = "4. Serper Search API Key",
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                             )
                             Text(
@@ -870,7 +1000,7 @@ fun SettingsScreen(
             }
 
             // ==========================================
-            // 4. Tavily Search API Key (Backup search)
+            // 5. Tavily Search API Key (Backup search)
             // ==========================================
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -901,7 +1031,7 @@ fun SettingsScreen(
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text(
-                                text = "4. Tavily Search API Key",
+                                text = "5. Tavily Search API Key",
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                             )
                             Text(
@@ -1041,6 +1171,7 @@ fun SettingsScreen(
                         openRouterApiKey = openRouterApiKey.trim(),
                         geminiModel = geminiModel.trim(),
                         openRouterModel = openRouterModel.trim(),
+                        resendApiKey = resendApiKey.trim(),
                         serperApiKey = serperApiKey.trim(),
                         tavilyApiKey = tavilyApiKey.trim(),
                         searchQuery = searchQuery.trim(),
@@ -1048,7 +1179,7 @@ fun SettingsScreen(
                     )
                     viewModel.saveSettings(updated)
                     scope.launch {
-                        snackbarHostState.showSnackbar("Settings and models saved securely in EncryptedSharedPreferences!")
+                        snackbarHostState.showSnackbar("All API keys and models saved securely in EncryptedSharedPreferences!")
                     }
                 },
                 modifier = Modifier
