@@ -80,13 +80,16 @@ class GeminiPitchService {
             val response = withTimeout(60_000L) {
                 model.generateContent(prompt)
             }
-            val jsonString = response.text
+            val jsonString = response.text?.trim()
+                ?.takeIf { it.isNotBlank() && !it.equals("null", ignoreCase = true) }
                 ?: throw IllegalStateException("Gemini returned an empty response.")
 
             val json = JSONObject(jsonString)
             val nameOrCompany = json.optString("prospectNameOrCompany", "Prospective Client")
             val subject = json.optString("subjectLine", "Quick question regarding your SEO audit")
-            val pitch = json.optString("personalizedPitchMessage", "")
+            val pitch = json.optString("personalizedPitchMessage", "").trim()
+                .takeIf { it.isNotBlank() && !it.equals("null", ignoreCase = true) }
+                ?: throw IllegalStateException("Gemini returned an empty pitch.")
             val suggestedValue = json.optDouble("suggestedRateOrValue", 1800.0)
             val cta = json.optString("recommendedCta", "Send a complimentary 4-minute audit video")
 

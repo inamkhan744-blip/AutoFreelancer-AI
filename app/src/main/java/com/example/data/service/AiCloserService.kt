@@ -72,7 +72,7 @@ class AiCloserService(
             [Your full, ready-to-send email body]
         """.trimIndent()
 
-        var drafted = """
+        val fallbackDraft = """
             Hi $senderName,
             
             Thank you for getting back to me regarding "$subject".
@@ -87,6 +87,7 @@ class AiCloserService(
             AutoFreelancer Agency Director
         """.trimIndent()
 
+        var drafted = fallbackDraft
         var category = "Budget Objection"
         var provider = "Autonomous Template Closer"
 
@@ -105,13 +106,24 @@ class AiCloserService(
             if (aiRes.isSuccess) {
                 val gen = aiRes.getOrThrow()
                 provider = gen.providerUsed
-                val content = gen.content
+                val content = gen.content.trim()
+                if (content.isBlank() || content.equals("null", ignoreCase = true)) {
+                    return@withContext Result.failure(
+                        IllegalStateException("AI returned an empty reply. Your existing draft was kept unchanged.")
+                    )
+                }
 
                 // Parse category and draft
                 if (content.contains("DRAFT REPLY:", ignoreCase = true)) {
                     val parts = content.split(Regex("DRAFT REPLY:", RegexOption.IGNORE_CASE))
                     val headerPart = parts[0]
-                    drafted = parts.getOrNull(1)?.trim() ?: content
+                    val generatedDraft = parts.getOrNull(1)?.trim().orEmpty()
+                    if (generatedDraft.isBlank() || generatedDraft.equals("null", ignoreCase = true)) {
+                        return@withContext Result.failure(
+                            IllegalStateException("AI returned an empty reply. Your existing draft was kept unchanged.")
+                        )
+                    }
+                    drafted = generatedDraft
 
                     if (headerPart.contains("OBJECTION TYPE:", ignoreCase = true)) {
                         category = headerPart.substringAfter("OBJECTION TYPE:").trim().lines().firstOrNull() ?: "General Objection"
@@ -121,8 +133,14 @@ class AiCloserService(
                     category = detectObjectionCategory(incomingMessage)
                 }
             } else {
-                Log.w(tag, "AI Closer generation fallback triggered: ${aiRes.exceptionOrNull()?.message}")
-                category = detectObjectionCategory(incomingMessage)
+                val error = aiRes.exceptionOrNull()
+                Log.w(tag, "AI Closer generation failed: ${error?.message}")
+                return@withContext Result.failure(
+                    IllegalStateException(
+                        "AI reply generation failed. Your existing draft was kept unchanged: ${error?.message ?: "Unknown AI error"}",
+                        error
+                    )
+                )
             }
         } else {
             category = detectObjectionCategory(incomingMessage)

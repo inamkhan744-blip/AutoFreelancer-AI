@@ -297,7 +297,7 @@ fun InboxScreen(
                                 style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
                             )
                             Text(
-                                text = "Review, edit, or attach ElevenLabs voice notes before Resend dispatch.",
+                                text = "Review, edit, or attach ElevenLabs voice notes before Brevo dispatch.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -709,7 +709,7 @@ private fun InboxEmailCard(
                     ) {
                         Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Approve & Send via Resend")
+                        Text("Approve & Send via Brevo")
                     }
 
                     OutlinedButton(
@@ -785,7 +785,7 @@ private fun InboxEmailCard(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = if (email.status == "Approved & Sent") "Dispatched to ${email.senderEmail} via Resend" else "Dismissed by Director",
+                        text = if (email.status == "Approved & Sent") "Dispatched to ${email.senderEmail} via Brevo" else "Dismissed by Director",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

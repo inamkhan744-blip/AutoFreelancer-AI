@@ -7,7 +7,9 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.foundation.layout.Box
@@ -37,6 +39,7 @@ import com.example.data.repository.TaskRepository
 import com.example.ui.screens.ClientDeliverablesScreen
 import com.example.ui.screens.ClientsCrmScreen
 import com.example.ui.screens.DashboardScreen
+import com.example.ui.screens.AuthScreen
 import com.example.ui.screens.InboxScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.theme.AutoFreelancerTheme
@@ -44,23 +47,44 @@ import com.example.ui.theme.CyberPrimary
 import com.example.ui.theme.CyberSecondary
 import com.example.ui.theme.CyberTertiary
 import com.example.ui.viewmodel.DashboardViewModel
+import com.google.firebase.Firebase
+import com.google.firebase.auth.auth
+import com.google.firebase.auth.FirebaseAuth
 
 class MainActivity : ComponentActivity() {
+    private var isAuthenticated by mutableStateOf(false)
+    private val authStateListener = FirebaseAuth.AuthStateListener { auth ->
+        isAuthenticated = auth.currentUser != null
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         com.example.util.configureAppCheck(this, intent)
         enableEdgeToEdge()
-
-        val settingsRepo = SettingsRepository(this)
-        if (settingsRepo.settingsFlow.value.autoPilotEnabled) {
+        isAuthenticated = Firebase.auth.currentUser != null
+        if (isAuthenticated && SettingsRepository(this).settingsFlow.value.autoPilotEnabled) {
             com.example.worker.AutoPilotScheduler.schedule(this, true)
         }
 
         setContent {
             AutoFreelancerTheme {
-                AppRootContent()
+                if (isAuthenticated) {
+                    AppRootContent()
+                } else {
+                    AuthScreen(onAuthSuccess = { isAuthenticated = true })
+                }
             }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        Firebase.auth.addAuthStateListener(authStateListener)
+    }
+
+    override fun onStop() {
+        Firebase.auth.removeAuthStateListener(authStateListener)
+        super.onStop()
     }
 }
 

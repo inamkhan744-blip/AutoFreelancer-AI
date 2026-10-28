@@ -73,5 +73,27 @@ service cloud.firestore {
       allow create, update: if isSignedIn() && request.auth.uid == userId;
       allow delete: if isSignedIn() && request.auth.uid == userId;
     }
+
+    match /users/{userId}/settings/{settingId} {
+      allow get: if isSignedIn() && request.auth.uid == userId && settingId == 'api_keys';
+      allow create, update: if isSignedIn() && request.auth.uid == userId &&
+        settingId == 'api_keys' &&
+        incoming().keys().hasOnly([
+          'gemini_api_key', 'openrouter_api_key', 'serper_api_key', 'tavily_api_key',
+          'elevenlabs_api_key', 'brevo_api_key', 'payment_link_url'
+        ]) &&
+        incoming().keys().hasAll([
+          'gemini_api_key', 'openrouter_api_key', 'serper_api_key', 'tavily_api_key',
+          'elevenlabs_api_key', 'brevo_api_key', 'payment_link_url'
+        ]) &&
+        incoming().gemini_api_key is string && incoming().gemini_api_key.size() <= 500 &&
+        incoming().openrouter_api_key is string && incoming().openrouter_api_key.size() <= 500 &&
+        incoming().serper_api_key is string && incoming().serper_api_key.size() <= 500 &&
+        incoming().tavily_api_key is string && incoming().tavily_api_key.size() <= 500 &&
+        incoming().elevenlabs_api_key is string && incoming().elevenlabs_api_key.size() <= 500 &&
+        incoming().brevo_api_key is string && incoming().brevo_api_key.size() <= 500 &&
+        incoming().payment_link_url is string && incoming().payment_link_url.size() <= 2048;
+      allow delete: if isSignedIn() && request.auth.uid == userId && settingId == 'api_keys';
+    }
   }
 }
