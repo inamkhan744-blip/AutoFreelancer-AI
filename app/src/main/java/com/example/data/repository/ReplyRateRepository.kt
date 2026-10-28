@@ -94,9 +94,5 @@ class ReplyRateRepository(
             val leaders: List<OutreachTone> = rates.filterValues { rate -> rate == bestRate }.keys.toList()
             return if (OutreachTone.PROFESSIONAL in leaders) OutreachTone.PROFESSIONAL else leaders.first()
         }
-            val bestRate = rates.values.filterNotNull().maxOrNull() ?: return OutreachTone.PROFESSIONAL
-            val leaders: List<OutreachTone> = rates.filterValues { rate -> rate == bestRate }.keys.toList()
-            return if (OutreachTone.PROFESSIONAL in leaders) OutreachTone.PROFESSIONAL else leaders.first()
-        }
     }
 }
