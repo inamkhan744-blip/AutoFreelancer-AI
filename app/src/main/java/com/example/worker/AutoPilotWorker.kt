@@ -25,6 +25,7 @@ import com.example.data.service.DynamicPricingEngine
 import com.example.data.service.SearchProspectService
 import com.example.util.BusinessEmailValidator
 import com.example.util.LiveWorkerLogStore
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import java.util.concurrent.TimeUnit
 
@@ -36,28 +37,33 @@ class AutoPilotWorker(
     private val tag = "AutoPilotWorker"
 
     override suspend fun doWork(): Result {
-        Log.i(tag, "Auto-Pilot worker triggered in background")
-        LiveWorkerLogStore.record("Auto-Pilot", "> Background worker started.")
-        val context = applicationContext
-        val settingsRepo = SettingsRepository(context)
-        runCatching { settingsRepo.loadCloudSettings() }
-            .onFailure { Log.e(tag, "Failed to load cloud settings: ${it.message}", it) }
-        val settings = settingsRepo.settingsFlow.value
-
-        if (!settings.autoPilotEnabled) {
-            Log.i(tag, "Auto-Pilot is currently disabled in Settings. Exiting job.")
-            return Result.success()
-        }
-
-        val taskRepo = TaskRepository(context)
-        val clientRepo = ClientRepository(context)
-        val aiService = AiOrchestrationService()
-        val searchService = SearchProspectService()
-        val emailService = BrevoEmailService()
-        val replyRateRepository = ReplyRateRepository()
-        val pricingEngine = DynamicPricingEngine(aiService)
-
         try {
+            Log.i(tag, "Auto-Pilot worker triggered in background")
+            LiveWorkerLogStore.record("Auto-Pilot", "> Background worker started.")
+            val context = applicationContext
+            val settingsRepo = SettingsRepository(context)
+            try {
+                settingsRepo.loadCloudSettings()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(tag, "Failed to load cloud settings: ${e.message}", e)
+            }
+            val settings = settingsRepo.settingsFlow.value
+
+            if (!settings.autoPilotEnabled) {
+                Log.i(tag, "Auto-Pilot is currently disabled in Settings. Exiting job.")
+                return Result.success()
+            }
+
+            val taskRepo = TaskRepository(context)
+            val clientRepo = ClientRepository(context)
+            val aiService = AiOrchestrationService()
+            val searchService = SearchProspectService()
+            val emailService = BrevoEmailService()
+            val replyRateRepository = ReplyRateRepository()
+            val pricingEngine = DynamicPricingEngine(aiService)
+
             // 1. Process all currently PENDING tasks automatically
             val currentTasks = taskRepo.observeTasks().first()
             val pendingTasks = currentTasks.filter { it.status == "PENDING" }
@@ -210,6 +216,8 @@ class AutoPilotWorker(
             }
 
             return Result.success()
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(tag, "Auto-Pilot execution encountered error: ${e.message}", e)
             return Result.failure()
