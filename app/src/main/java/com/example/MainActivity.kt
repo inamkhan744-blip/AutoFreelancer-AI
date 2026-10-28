@@ -57,7 +57,7 @@ import com.google.firebase.auth.auth
 import com.google.firebase.auth.FirebaseAuth
 
 class MainActivity : ComponentActivity() {
-    private var isAuthenticated by mutableStateOf(false)
+    private var isAuthenticated by mutableStateOf(true)
     private var startupError by mutableStateOf(AppStartupState.errorMessage)
     private var firebaseAuth: FirebaseAuth? = null
     private var authStateListener: FirebaseAuth.AuthStateListener? = null
