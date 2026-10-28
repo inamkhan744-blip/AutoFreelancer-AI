@@ -61,5 +61,17 @@ service cloud.firestore {
 
       allow delete: if isSignedIn() && request.auth.uid == userId && isValidId(taskId);
     }
+
+    match /users/{userId}/clients/{clientId} {
+      allow get, list: if isSignedIn() && request.auth.uid == userId;
+      allow create, update: if isSignedIn() && request.auth.uid == userId;
+      allow delete: if isSignedIn() && request.auth.uid == userId;
+    }
+
+    match /users/{userId}/inbox/{messageId} {
+      allow get, list: if isSignedIn() && request.auth.uid == userId;
+      allow create, update: if isSignedIn() && request.auth.uid == userId;
+      allow delete: if isSignedIn() && request.auth.uid == userId;
+    }
   }
 }

@@ -11,6 +11,11 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
+data class EmailAttachment(
+    val filename: String,
+    val contentBase64: String
+)
+
 data class EmailSendResult(
     val emailId: String,
     val recipient: String,
@@ -33,13 +38,15 @@ class ResendEmailService(
      * @param subject The email subject line
      * @param bodyText The plain text content (or generated proposal)
      * @param fromAddress Sender address; defaults to Resend's verified onboarding sender
+     * @param attachments Optional list of file attachments (e.g. ElevenLabs generated audio)
      */
     suspend fun sendEmail(
         apiKey: String,
         toEmail: String,
         subject: String,
         bodyText: String,
-        fromAddress: String = "AutoFreelancer AI <onboarding@resend.dev>"
+        fromAddress: String = "AutoFreelancer AI <onboarding@resend.dev>",
+        attachments: List<EmailAttachment> = emptyList()
     ): Result<EmailSendResult> = withContext(Dispatchers.IO) {
         val cleanKey = apiKey.trim()
         val cleanTo = toEmail.trim()
@@ -68,6 +75,18 @@ class ResendEmailService(
                 put("to", toArray)
                 put("subject", subject.ifBlank { "SEO Audit & Growth Proposal" })
                 put("text", bodyText)
+
+                if (attachments.isNotEmpty()) {
+                    val attachmentsArray = JSONArray()
+                    for (att in attachments) {
+                        val attObj = JSONObject().apply {
+                            put("filename", att.filename)
+                            put("content", att.contentBase64)
+                        }
+                        attachmentsArray.put(attObj)
+                    }
+                    put("attachments", attachmentsArray)
+                }
             }
 
             val request = Request.Builder()

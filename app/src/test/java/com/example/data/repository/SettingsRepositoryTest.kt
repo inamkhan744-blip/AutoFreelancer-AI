@@ -34,6 +34,9 @@ class SettingsRepositoryTest {
             openRouterModel = "google/gemma-4-26b-a4b-it:free",
             serperApiKey = "serper_test_key_67890",
             tavilyApiKey = "tvly_test_backup_key_abcde",
+            resendApiKey = "re_test_email_key_123",
+            paymentLinkUrl = "https://buy.stripe.com/test_payment_link",
+            autoPilotEnabled = true,
             searchQuery = "looking for SEO audit site:linkedin.com"
         )
 
@@ -46,10 +49,15 @@ class SettingsRepositoryTest {
         assertEquals("google/gemma-4-26b-a4b-it:free", loaded.openRouterModel)
         assertEquals("serper_test_key_67890", loaded.serperApiKey)
         assertEquals("tvly_test_backup_key_abcde", loaded.tavilyApiKey)
+        assertEquals("re_test_email_key_123", loaded.resendApiKey)
+        assertEquals("https://buy.stripe.com/test_payment_link", loaded.paymentLinkUrl)
+        assertTrue(loaded.autoPilotEnabled)
         assertTrue(loaded.isGeminiConfigured)
         assertTrue(loaded.isOpenRouterConfigured)
         assertTrue(loaded.isAiConfigured)
         assertTrue(loaded.isSearchConfigured)
+        assertTrue(loaded.isResendConfigured)
+        assertTrue(loaded.isPaymentLinkConfigured)
     }
 
     @Test

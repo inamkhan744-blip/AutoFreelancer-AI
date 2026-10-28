@@ -47,6 +47,8 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material.icons.filled.Payment
+import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
@@ -57,9 +59,12 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -110,6 +115,7 @@ fun SettingsScreen(
 
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
 
     // Form inputs initialized from EncryptedSharedPreferences
     var geminiApiKey by remember(currentSettings) { mutableStateOf(currentSettings.geminiApiKey) }
@@ -119,8 +125,13 @@ fun SettingsScreen(
     var resendApiKey by remember(currentSettings) { mutableStateOf(currentSettings.resendApiKey) }
     var serperApiKey by remember(currentSettings) { mutableStateOf(currentSettings.serperApiKey) }
     var tavilyApiKey by remember(currentSettings) { mutableStateOf(currentSettings.tavilyApiKey) }
+    var paymentLinkUrl by remember(currentSettings) { mutableStateOf(currentSettings.paymentLinkUrl) }
+    var autoPilotEnabled by remember(currentSettings) { mutableStateOf(currentSettings.autoPilotEnabled) }
     var searchQuery by remember(currentSettings) { mutableStateOf(currentSettings.searchQuery) }
     var autoRunOnApproval by remember(currentSettings) { mutableStateOf(currentSettings.autoRunOnApproval) }
+    var elevenLabsApiKey by remember(currentSettings) { mutableStateOf(currentSettings.elevenLabsApiKey) }
+    var elevenLabsVoiceId by remember(currentSettings) { mutableStateOf(currentSettings.elevenLabsVoiceId) }
+    var inboundEmailWebhookUrl by remember(currentSettings) { mutableStateOf(currentSettings.inboundEmailWebhookUrl) }
 
     // Dropdown toggles
     var geminiDropdownExpanded by remember { mutableStateOf(false) }
@@ -132,6 +143,7 @@ fun SettingsScreen(
     var showResendKey by remember { mutableStateOf(false) }
     var showSerperKey by remember { mutableStateOf(false) }
     var showTavilyKey by remember { mutableStateOf(false) }
+    var showElevenLabsKey by remember { mutableStateOf(false) }
 
     // Test connection states
     var geminiTesting by remember { mutableStateOf(false) }
@@ -148,6 +160,9 @@ fun SettingsScreen(
 
     var tavilyTesting by remember { mutableStateOf(false) }
     var tavilyTestResult by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
+
+    var elevenLabsTesting by remember { mutableStateOf(false) }
+    var elevenLabsTestResult by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
 
     Scaffold(
         topBar = {
@@ -222,18 +237,28 @@ fun SettingsScreen(
             }
 
             // Quick Status Pills
-            Row(
+            FlowRow(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 StatusPill(
-                    label = "Gemini AI",
-                    isConfigured = geminiApiKey.isNotBlank(),
+                    label = "Auto-Pilot",
+                    isConfigured = autoPilotEnabled,
+                    configuredText = "ACTIVE",
+                    unconfiguredText = "OFF",
                     modifier = Modifier.weight(1f)
                 )
                 StatusPill(
-                    label = "OpenRouter",
-                    isConfigured = openRouterApiKey.isNotBlank(),
+                    label = "Payment Link",
+                    isConfigured = paymentLinkUrl.isNotBlank(),
+                    configuredText = "ATTACHED",
+                    unconfiguredText = "NONE",
+                    modifier = Modifier.weight(1f)
+                )
+                StatusPill(
+                    label = "Gemini AI",
+                    isConfigured = geminiApiKey.isNotBlank(),
                     modifier = Modifier.weight(1f)
                 )
                 StatusPill(
@@ -241,11 +266,184 @@ fun SettingsScreen(
                     isConfigured = resendApiKey.isNotBlank(),
                     modifier = Modifier.weight(1f)
                 )
-                StatusPill(
-                    label = "Search API",
-                    isConfigured = serperApiKey.isNotBlank() || tavilyApiKey.isNotBlank(),
-                    modifier = Modifier.weight(1f)
+            }
+
+            // ==========================================
+            // Auto-Pilot Mode (Background Automation)
+            // ==========================================
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (autoPilotEnabled) CyberTertiary.copy(alpha = 0.15f)
+                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                ),
+                border = CardDefaults.outlinedCardBorder().copy(
+                    brush = if (autoPilotEnabled) Brush.horizontalGradient(listOf(CyberTertiary, CyberSecondary))
+                    else Brush.horizontalGradient(listOf(Color.Gray.copy(alpha = 0.3f), Color.Gray.copy(alpha = 0.3f)))
                 )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .background(if (autoPilotEnabled) CyberTertiary.copy(alpha = 0.25f) else Color.Gray.copy(alpha = 0.2f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.SmartToy,
+                                    contentDescription = null,
+                                    tint = if (autoPilotEnabled) CyberTertiary else Color.LightGray,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            Column {
+                                Text(
+                                    text = "Auto-Pilot Mode",
+                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = if (autoPilotEnabled) "Autonomous Background Pipeline Active" else "Manual Approval Required",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (autoPilotEnabled) CyberTertiary else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Switch(
+                            checked = autoPilotEnabled,
+                            onCheckedChange = { autoPilotEnabled = it },
+                            modifier = Modifier.testTag("auto_pilot_switch"),
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = CyberTertiary,
+                                uncheckedThumbColor = Color.LightGray,
+                                uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant
+                            )
+                        )
+                    }
+
+                    Text(
+                        text = "When Auto-Pilot is ON, the app automatically approves and executes any pending tasks without waiting for manual confirmation. Android WorkManager periodically discovers leads, synthesizes proposals, and dispatches deliverables in the background even if the app is closed.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    if (autoPilotEnabled) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(CyberTertiary.copy(alpha = 0.15f))
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Icon(Icons.Default.CheckCircle, contentDescription = null, tint = CyberTertiary, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Auto-Pilot Active • Background sync & autonomous execution enabled",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                                color = CyberTertiary
+                            )
+                        }
+                    }
+                }
+            }
+
+            // ==========================================
+            // Dynamic Payment Link (Gumroad / Stripe)
+            // ==========================================
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(CyberSecondary.copy(alpha = 0.2f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Payment,
+                                contentDescription = null,
+                                tint = CyberSecondary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Column {
+                            Text(
+                                text = "Dynamic Payment Link URL",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Automated Client Checkout & CTA",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = CyberSecondary
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = "Whenever the AI generates a proposal or deliverable for a client, it will automatically append a Call-to-Action with this payment link at the end: 'To get the full SEO audit report, please complete the payment here: [Insert Payment Link]'. If left empty, nothing is appended.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    OutlinedTextField(
+                        value = paymentLinkUrl,
+                        onValueChange = { paymentLinkUrl = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("payment_link_input"),
+                        label = { Text("Payment Link URL (Gumroad / Stripe)") },
+                        placeholder = { Text("https://buy.stripe.com/... or https://gumroad.com/l/...") },
+                        singleLine = true
+                    )
+
+                    if (paymentLinkUrl.isNotBlank()) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(CyberSuccess.copy(alpha = 0.12f))
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Icon(Icons.Default.CheckCircle, contentDescription = null, tint = CyberSuccess, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "CTA will append: 'To get the full SEO audit report, please complete the payment here: ${paymentLinkUrl.trim()}'",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = CyberSuccess
+                            )
+                        }
+                    }
+                }
             }
 
             // ==========================================
@@ -887,6 +1085,190 @@ fun SettingsScreen(
             }
 
             // ==========================================
+            // ElevenLabs API Key (AI Voice Notes)
+            // ==========================================
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(CircleShape)
+                                .background(CyberPrimary.copy(alpha = 0.2f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = null,
+                                tint = CyberPrimary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                text = "ElevenLabs API Key (AI Voice Notes)",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+                            Text(
+                                text = "Converts generated proposals into realistic MP3 audio notes attached to outreach emails.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    OutlinedTextField(
+                        value = elevenLabsApiKey,
+                        onValueChange = { elevenLabsApiKey = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("elevenlabs_api_key_input"),
+                        label = { Text("ElevenLabs API Key") },
+                        placeholder = { Text("xi-api-key...") },
+                        visualTransformation = if (showElevenLabsKey) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { showElevenLabsKey = !showElevenLabsKey }) {
+                                Icon(
+                                    imageVector = if (showElevenLabsKey) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = if (showElevenLabsKey) "Hide key" else "Show key"
+                                )
+                            }
+                        },
+                        singleLine = true
+                    )
+
+                    Text(
+                        text = "Voice Persona:",
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        FilterChip(
+                            selected = elevenLabsVoiceId == "21m00Tcm4TlvDq8ikWAM",
+                            onClick = { elevenLabsVoiceId = "21m00Tcm4TlvDq8ikWAM" },
+                            label = { Text("Rachel (Natural)") }
+                        )
+                        FilterChip(
+                            selected = elevenLabsVoiceId == "pNInz6obpgDQGcFmaJgB",
+                            onClick = { elevenLabsVoiceId = "pNInz6obpgDQGcFmaJgB" },
+                            label = { Text("Adam (Authoritative)") }
+                        )
+                        FilterChip(
+                            selected = elevenLabsVoiceId == "29vD33N1CtxCmqQRPOHJ",
+                            onClick = { elevenLabsVoiceId = "29vD33N1CtxCmqQRPOHJ" },
+                            label = { Text("Drew (Conversational)") }
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                if (elevenLabsApiKey.isBlank()) {
+                                    elevenLabsTestResult = Pair(false, "Please enter an ElevenLabs API key first")
+                                    return@OutlinedButton
+                                }
+                                elevenLabsTesting = true
+                                elevenLabsTestResult = null
+                                viewModel.testElevenLabsKey(elevenLabsApiKey) { success, msg ->
+                                    elevenLabsTesting = false
+                                    elevenLabsTestResult = Pair(success, msg)
+                                }
+                            },
+                            enabled = !elevenLabsTesting && elevenLabsApiKey.isNotBlank(),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.testTag("test_elevenlabs_button")
+                        ) {
+                            if (elevenLabsTesting) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Testing...", fontSize = 12.sp)
+                            } else {
+                                Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Test ElevenLabs Connection", fontSize = 12.sp)
+                            }
+                        }
+
+                        elevenLabsTestResult?.let { (success, msg) ->
+                            InlineStatusBadge(success = success, message = msg)
+                        }
+                    }
+                }
+            }
+
+            // ==========================================
+            // The AI Closer: Incoming Email Webhook URL
+            // ==========================================
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(CircleShape)
+                                .background(CyberTertiary.copy(alpha = 0.2f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Email,
+                                contentDescription = null,
+                                tint = CyberTertiary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                text = "The AI Closer: Inbound Webhook URL",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+                            Text(
+                                text = "Receive client email replies from Zapier, Make, or Cloudflare Worker for autonomous objection handling.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    OutlinedTextField(
+                        value = inboundEmailWebhookUrl,
+                        onValueChange = { inboundEmailWebhookUrl = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("inbound_webhook_url_input"),
+                        label = { Text("Webhook Endpoint URL") },
+                        placeholder = { Text("https://hooks.zapier.com/hooks/catch/...") },
+                        singleLine = true
+                    )
+                }
+            }
+
+            // ==========================================
             // 4. Serper Search API Key
             // ==========================================
             Card(
@@ -1174,12 +1556,17 @@ fun SettingsScreen(
                         resendApiKey = resendApiKey.trim(),
                         serperApiKey = serperApiKey.trim(),
                         tavilyApiKey = tavilyApiKey.trim(),
+                        paymentLinkUrl = paymentLinkUrl.trim(),
+                        autoPilotEnabled = autoPilotEnabled,
                         searchQuery = searchQuery.trim(),
-                        autoRunOnApproval = autoRunOnApproval
+                        autoRunOnApproval = autoRunOnApproval,
+                        elevenLabsApiKey = elevenLabsApiKey.trim(),
+                        elevenLabsVoiceId = elevenLabsVoiceId.trim(),
+                        inboundEmailWebhookUrl = inboundEmailWebhookUrl.trim()
                     )
-                    viewModel.saveSettings(updated)
+                    viewModel.saveSettings(updated, context)
                     scope.launch {
-                        snackbarHostState.showSnackbar("All API keys and models saved securely in EncryptedSharedPreferences!")
+                        snackbarHostState.showSnackbar("All API keys, ElevenLabs Voice, and Webhook settings saved securely!")
                     }
                 },
                 modifier = Modifier
@@ -1203,6 +1590,8 @@ fun SettingsScreen(
 private fun StatusPill(
     label: String,
     isConfigured: Boolean,
+    configuredText: String = "Configured",
+    unconfiguredText: String = "Not set",
     modifier: Modifier = Modifier
 ) {
     Card(
@@ -1240,7 +1629,7 @@ private fun StatusPill(
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    text = if (isConfigured) "Configured" else "Not set",
+                    text = if (isConfigured) configuredText else unconfiguredText,
                     fontSize = 8.sp,
                     color = if (isConfigured) CyberSuccess else MaterialTheme.colorScheme.onSurfaceVariant
                 )

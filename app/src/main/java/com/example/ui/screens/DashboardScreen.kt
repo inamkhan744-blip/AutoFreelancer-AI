@@ -1,5 +1,16 @@
 package com.example.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.media.MediaPlayer
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
+import com.example.data.service.GeneratedVoiceNote
+import com.example.util.JarvisVoiceManager
+import com.example.util.VoiceCommandState
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -53,6 +64,10 @@ import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material.icons.filled.Work
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
@@ -77,6 +92,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -126,10 +143,54 @@ fun DashboardScreen(
     val searchQuery by viewModel.searchQuery.collectAsState()
     val statusFilter by viewModel.statusFilter.collectAsState()
     val isOperationLoading by viewModel.isOperationLoading.collectAsState()
+    val isAutoPilotActive by viewModel.isAutoPilotActive.collectAsState()
 
     val currentUser = runCatching { Firebase.auth.currentUser }.getOrNull()
     val userEmail = currentUser?.email ?: "Freelancer Director"
     val userName = currentUser?.displayName ?: userEmail.substringBefore("@")
+
+    val context = LocalContext.current
+    val jarvisManager = remember {
+        JarvisVoiceManager(
+            context = context,
+            onApproveAllTasks = {
+                viewModel.approveAllPendingTasks { count ->
+                    Toast.makeText(context, "Jarvis approved $count tasks!", Toast.LENGTH_SHORT).show()
+                }
+            },
+            onFindLeads = {
+                viewModel.runLeadDiscovery()
+                Toast.makeText(context, "Jarvis launched Lead Discovery!", Toast.LENGTH_SHORT).show()
+            },
+            onNavigateTo = { screen ->
+                when (screen) {
+                    "SETTINGS" -> onNavigateToSettings()
+                    else -> viewModel.navigateTo(screen)
+                }
+            }
+        )
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            jarvisManager.stopListening()
+        }
+    }
+
+    val voiceState by jarvisManager.voiceState.collectAsState()
+    val lastRecognizedText by jarvisManager.lastRecognizedText.collectAsState()
+    var showJarvisDialog by remember { mutableStateOf(false) }
+
+    val recordAudioLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            showJarvisDialog = true
+            jarvisManager.startListening()
+        } else {
+            Toast.makeText(context, "Microphone permission required for Jarvis voice commands", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -158,10 +219,32 @@ fun DashboardScreen(
                             )
                         }
                         Column {
-                            Text(
-                                text = "Auto-Freelancer AI",
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = "Auto-Freelancer AI",
+                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                                )
+                                if (isAutoPilotActive) {
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(CyberTertiary.copy(alpha = 0.2f))
+                                            .border(1.dp, CyberTertiary, RoundedCornerShape(6.dp))
+                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                            .testTag("auto_pilot_active_badge")
+                                    ) {
+                                        Text(
+                                            text = "Auto-Pilot Active",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                            color = CyberTertiary,
+                                            fontSize = 9.sp
+                                        )
+                                    }
+                                }
+                            }
                             Text(
                                 text = "Director: $userName",
                                 style = MaterialTheme.typography.bodySmall,
@@ -214,6 +297,26 @@ fun DashboardScreen(
                 }
             )
         },
+        floatingActionButton = {
+            FloatingActionButton(
+                onClick = {
+                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                        showJarvisDialog = true
+                        jarvisManager.startListening()
+                    } else {
+                        recordAudioLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                    }
+                },
+                modifier = Modifier.testTag("jarvis_mic_button"),
+                containerColor = if (voiceState is VoiceCommandState.Listening) CyberSecondary else CyberPrimary,
+                contentColor = Color.White
+            ) {
+                Icon(
+                    imageVector = if (voiceState is VoiceCommandState.Listening) Icons.Default.Stop else Icons.Default.Mic,
+                    contentDescription = "Jarvis Voice Commands"
+                )
+            }
+        },
         containerColor = MaterialTheme.colorScheme.background
     ) { innerPadding ->
         BoxWithConstraints(
@@ -235,6 +338,71 @@ fun DashboardScreen(
                             notification = notif,
                             onDismiss = { viewModel.dismissNotification() }
                         )
+                    }
+                }
+
+                // Auto-Pilot Status Banner
+                AnimatedVisibility(
+                    visible = isAutoPilotActive,
+                    enter = fadeIn() + expandVertically(),
+                    exit = fadeOut() + shrinkVertically()
+                ) {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp)
+                            .testTag("auto_pilot_banner"),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = CardDefaults.cardColors(containerColor = CyberTertiary.copy(alpha = 0.12f)),
+                        border = CardDefaults.outlinedCardBorder().copy(
+                            brush = Brush.horizontalGradient(listOf(CyberTertiary, CyberSecondary))
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(28.dp)
+                                        .clip(CircleShape)
+                                        .background(CyberTertiary.copy(alpha = 0.25f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.SmartToy,
+                                        contentDescription = null,
+                                        tint = CyberTertiary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                                Column {
+                                    Text(
+                                        text = "Auto-Pilot Mode Active",
+                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = CyberTertiary
+                                    )
+                                    Text(
+                                        text = "Pending tasks auto-approved • Background periodic sync running via WorkManager",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        fontSize = 11.sp
+                                    )
+                                }
+                            }
+                            AssistChip(
+                                onClick = onNavigateToSettings,
+                                label = { Text("Settings", fontSize = 10.sp) }
+                            )
+                        }
                     }
                 }
 
@@ -283,9 +451,7 @@ fun DashboardScreen(
                                 onReject = { selectedTask?.let { viewModel.openRejectDialog(it) } },
                                 onComplete = { selectedTask?.let { viewModel.completeTask(it.id) } },
                                 onClose = { viewModel.selectTaskForDetail(null) },
-                                onSendEmail = { targetEmail, callback ->
-                                    selectedTask?.let { viewModel.sendTaskEmail(it, targetEmail, callback) }
-                                }
+                                viewModel = viewModel
                             )
                         }
                     }
@@ -360,6 +526,7 @@ fun DashboardScreen(
                             var mobileRecipientEmail by remember(task.id, task.clientEmail) { mutableStateOf(task.clientEmail) }
                             var mobileSendingEmail by remember { mutableStateOf(false) }
                             var mobileEmailStatus by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
+                            var mobileVoiceNote by remember(task.id) { mutableStateOf<GeneratedVoiceNote?>(null) }
 
                             Column(
                                 modifier = Modifier
@@ -404,6 +571,16 @@ fun DashboardScreen(
 
                                 Spacer(modifier = Modifier.height(16.dp))
 
+                                // AI Voice Note (ElevenLabs)
+                                VoiceNoteSection(
+                                    task = task,
+                                    viewModel = viewModel,
+                                    voiceNote = mobileVoiceNote,
+                                    onVoiceNoteGenerated = { mobileVoiceNote = it }
+                                )
+
+                                Spacer(modifier = Modifier.height(16.dp))
+
                                 // Resend Email Dispatch Section
                                 Card(
                                     modifier = Modifier.fillMaxWidth(),
@@ -437,7 +614,7 @@ fun DashboardScreen(
                                                 if (mobileRecipientEmail.isNotBlank()) {
                                                     mobileSendingEmail = true
                                                     mobileEmailStatus = null
-                                                    viewModel.sendTaskEmail(task, mobileRecipientEmail) { success, msg ->
+                                                    viewModel.sendTaskEmail(task, mobileRecipientEmail, mobileVoiceNote) { success, msg ->
                                                         mobileSendingEmail = false
                                                         mobileEmailStatus = Pair(success, msg)
                                                     }
@@ -454,7 +631,7 @@ fun DashboardScreen(
                                             } else {
                                                 Icon(Icons.Default.Email, contentDescription = null, modifier = Modifier.size(16.dp))
                                                 Spacer(modifier = Modifier.width(6.dp))
-                                                Text("Send Email")
+                                                Text("Send Email" + if (mobileVoiceNote != null) " + Voice Note" else "")
                                             }
                                         }
 
@@ -517,6 +694,21 @@ fun DashboardScreen(
             onDismiss = { viewModel.closeCreateTaskDialog() },
             onSubmit = { title, category, worker, role, client, clientEmail, value, details, priority ->
                 viewModel.createCustomTask(title, category, worker, role, client, clientEmail, value, details, priority)
+            }
+        )
+    }
+
+    // Jarvis Voice Command Visual Indicator Modal
+    if (showJarvisDialog || voiceState is VoiceCommandState.Listening || voiceState is VoiceCommandState.Processing) {
+        JarvisVisualIndicatorDialog(
+            voiceState = voiceState,
+            lastRecognizedText = lastRecognizedText,
+            onDismiss = {
+                showJarvisDialog = false
+                jarvisManager.stopListening()
+            },
+            onManualCommand = { cmd ->
+                jarvisManager.executeManualCommand(cmd)
             }
         )
     }
@@ -1190,7 +1382,7 @@ fun TaskDetailPane(
     onReject: () -> Unit,
     onComplete: () -> Unit,
     onClose: () -> Unit,
-    onSendEmail: ((targetEmail: String, onResult: (Boolean, String) -> Unit) -> Unit)? = null
+    viewModel: DashboardViewModel
 ) {
     if (task == null) {
         Box(
@@ -1220,6 +1412,8 @@ fun TaskDetailPane(
             }
         }
     } else {
+        var generatedVoiceNote by remember(task.id) { mutableStateOf<GeneratedVoiceNote?>(null) }
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -1301,6 +1495,16 @@ fun TaskDetailPane(
 
             Spacer(modifier = Modifier.height(16.dp))
 
+            // AI Voice Note (ElevenLabs)
+            VoiceNoteSection(
+                task = task,
+                viewModel = viewModel,
+                voiceNote = generatedVoiceNote,
+                onVoiceNoteGenerated = { generatedVoiceNote = it }
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
             // Resend Email Dispatch Section
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -1347,17 +1551,17 @@ fun TaskDetailPane(
                     ) {
                         Button(
                             onClick = {
-                                if (recipientEmail.isNotBlank() && onSendEmail != null) {
+                                if (recipientEmail.isNotBlank()) {
                                     isSendingEmail = true
                                     emailStatusMessage = null
-                                    onSendEmail(recipientEmail) { success, msg ->
+                                    viewModel.sendTaskEmail(task, recipientEmail, generatedVoiceNote) { success, msg ->
                                         isSendingEmail = false
                                         emailStatusMessage = Pair(success, msg)
                                     }
                                 }
                             },
                             modifier = Modifier.testTag("send_email_button"),
-                            enabled = !isSendingEmail && recipientEmail.isNotBlank() && onSendEmail != null,
+                            enabled = !isSendingEmail && recipientEmail.isNotBlank(),
                             colors = ButtonDefaults.buttonColors(containerColor = CyberTertiary)
                         ) {
                             if (isSendingEmail) {
@@ -1371,7 +1575,7 @@ fun TaskDetailPane(
                             } else {
                                 Icon(Icons.Default.Email, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Send Email")
+                                Text("Send Email" + if (generatedVoiceNote != null) " + Voice Note" else "")
                             }
                         }
                     }
@@ -1673,6 +1877,358 @@ fun CreateTaskDialog(
         dismissButton = {
             TextButton(onClick = onDismiss) {
                 Text("Cancel")
+            }
+        }
+    )
+}
+
+@Composable
+fun VoiceNoteSection(
+    task: Task,
+    viewModel: DashboardViewModel,
+    voiceNote: GeneratedVoiceNote?,
+    onVoiceNoteGenerated: (GeneratedVoiceNote?) -> Unit
+) {
+    val context = LocalContext.current
+    var isGenerating by remember { mutableStateOf(false) }
+    var voiceErrorMsg by remember { mutableStateOf<String?>(null) }
+    var isPlaying by remember { mutableStateOf(false) }
+    var mediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
+
+    DisposableEffect(voiceNote) {
+        onDispose {
+            mediaPlayer?.release()
+            mediaPlayer = null
+            isPlaying = false
+        }
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFF1E1B4B).copy(alpha = 0.5f)
+        ),
+        border = CardDefaults.outlinedCardBorder().copy(
+            brush = Brush.horizontalGradient(listOf(CyberPrimary, CyberSecondary))
+        )
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Headphones,
+                        contentDescription = null,
+                        tint = CyberPrimaryLight,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Column {
+                        Text(
+                            text = "AI Voice Note for Outreach",
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                        )
+                        Text(
+                            text = "ElevenLabs Neural Audio Pitch",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+
+                if (voiceNote != null) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(CyberTertiary.copy(alpha = 0.2f))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = "Ready (${voiceNote.fileSizeKb} KB)",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = CyberTertiary
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            if (voiceNote == null) {
+                Button(
+                    onClick = {
+                        val textToConvert = task.details.ifBlank {
+                            "Hello ${task.client}, this is an automated agency proposal regarding ${task.title}. We have identified key growth opportunities for your brand."
+                        }
+                        isGenerating = true
+                        voiceErrorMsg = null
+                        viewModel.generateVoiceNoteForText(
+                            context = context,
+                            text = textToConvert,
+                            outputFileName = "pitch_${task.id.take(8)}"
+                        ) { success, generated, msg ->
+                            isGenerating = false
+                            if (success && generated != null) {
+                                onVoiceNoteGenerated(generated)
+                            } else {
+                                voiceErrorMsg = msg
+                            }
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("generate_voice_note_button"),
+                    enabled = !isGenerating,
+                    colors = ButtonDefaults.buttonColors(containerColor = CyberPrimary)
+                ) {
+                    if (isGenerating) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            color = Color.White,
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Synthesizing MP3 Voice Note...")
+                    } else {
+                        Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Generate Voice Note (ElevenLabs)")
+                    }
+                }
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            if (isPlaying) {
+                                mediaPlayer?.stop()
+                                mediaPlayer?.release()
+                                mediaPlayer = null
+                                isPlaying = false
+                            } else {
+                                try {
+                                    mediaPlayer?.release()
+                                    mediaPlayer = MediaPlayer().apply {
+                                        setDataSource(voiceNote.file.absolutePath)
+                                        prepare()
+                                        setOnCompletionListener { isPlaying = false }
+                                        start()
+                                    }
+                                    isPlaying = true
+                                } catch (e: Exception) {
+                                    voiceErrorMsg = "Playback error: ${e.message}"
+                                }
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (isPlaying) CyberError else CyberTertiary
+                        )
+                    ) {
+                        Icon(
+                            imageVector = if (isPlaying) Icons.Default.Stop else Icons.Default.PlayArrow,
+                            contentDescription = if (isPlaying) "Stop" else "Play"
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(if (isPlaying) "Stop Preview" else "Play Voice Note")
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            mediaPlayer?.release()
+                            mediaPlayer = null
+                            isPlaying = false
+                            onVoiceNoteGenerated(null)
+                        }
+                    ) {
+                        Text("Re-record")
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "✓ Attached as MP3 audio in proposal email dispatch",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = CyberSecondary,
+                    fontSize = 11.sp
+                )
+            }
+
+            voiceErrorMsg?.let { err ->
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = err,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = CyberError
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun JarvisVisualIndicatorDialog(
+    voiceState: VoiceCommandState,
+    lastRecognizedText: String,
+    onDismiss: () -> Unit,
+    onManualCommand: (String) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(CyberSecondary.copy(alpha = 0.2f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Mic,
+                        contentDescription = null,
+                        tint = CyberSecondary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+                Text("Jarvis Voice Commands", fontWeight = FontWeight.Bold)
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                // Visual Pulse / State Indicator
+                Box(
+                    modifier = Modifier
+                        .size(80.dp)
+                        .clip(CircleShape)
+                        .background(
+                            when (voiceState) {
+                                is VoiceCommandState.Listening -> CyberSecondary.copy(alpha = 0.15f)
+                                is VoiceCommandState.Processing -> CyberPrimary.copy(alpha = 0.15f)
+                                is VoiceCommandState.ActionExecuted -> CyberTertiary.copy(alpha = 0.15f)
+                                is VoiceCommandState.Error -> CyberError.copy(alpha = 0.15f)
+                                else -> MaterialTheme.colorScheme.surfaceVariant
+                            }
+                        )
+                        .border(
+                            width = 2.dp,
+                            color = when (voiceState) {
+                                is VoiceCommandState.Listening -> CyberSecondary
+                                is VoiceCommandState.Processing -> CyberPrimary
+                                is VoiceCommandState.ActionExecuted -> CyberTertiary
+                                is VoiceCommandState.Error -> CyberError
+                                else -> MaterialTheme.colorScheme.outline
+                            },
+                            shape = CircleShape
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = when (voiceState) {
+                            is VoiceCommandState.Listening -> Icons.Default.Mic
+                            is VoiceCommandState.Processing -> Icons.Default.Sync
+                            is VoiceCommandState.ActionExecuted -> Icons.Default.CheckCircle
+                            is VoiceCommandState.Error -> Icons.Default.Cancel
+                            else -> Icons.Default.Mic
+                        },
+                        contentDescription = null,
+                        tint = when (voiceState) {
+                            is VoiceCommandState.Listening -> CyberSecondary
+                            is VoiceCommandState.Processing -> CyberPrimary
+                            is VoiceCommandState.ActionExecuted -> CyberTertiary
+                            is VoiceCommandState.Error -> CyberError
+                            else -> MaterialTheme.colorScheme.onSurface
+                        },
+                        modifier = Modifier.size(36.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Text(
+                    text = when (voiceState) {
+                        is VoiceCommandState.Listening -> "Listening... Speak clearly into the microphone"
+                        is VoiceCommandState.Processing -> "Interpreting voice command..."
+                        is VoiceCommandState.ActionExecuted -> voiceState.feedback
+                        is VoiceCommandState.Error -> voiceState.message
+                        else -> "Jarvis Standby"
+                    },
+                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                    textAlign = TextAlign.Center,
+                    color = when (voiceState) {
+                        is VoiceCommandState.Listening -> CyberSecondary
+                        is VoiceCommandState.ActionExecuted -> CyberTertiary
+                        is VoiceCommandState.Error -> CyberError
+                        else -> MaterialTheme.colorScheme.onSurface
+                    }
+                )
+
+                if (lastRecognizedText.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "\"$lastRecognizedText\"",
+                        style = MaterialTheme.typography.bodySmall.copy(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Text(
+                    text = "Or tap a quick command:",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    AssistChip(
+                        onClick = { onManualCommand("Approve all tasks") },
+                        label = { Text("Approve all tasks") },
+                        leadingIcon = { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(14.dp)) }
+                    )
+                    AssistChip(
+                        onClick = { onManualCommand("Find more leads") },
+                        label = { Text("Find more leads") },
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(14.dp)) }
+                    )
+                    AssistChip(
+                        onClick = { onManualCommand("Open Inbox") },
+                        label = { Text("Open Inbox") },
+                        leadingIcon = { Icon(Icons.Default.Email, contentDescription = null, modifier = Modifier.size(14.dp)) }
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onDismiss,
+                colors = ButtonDefaults.buttonColors(containerColor = CyberPrimary)
+            ) {
+                Text("Done")
             }
         }
     )

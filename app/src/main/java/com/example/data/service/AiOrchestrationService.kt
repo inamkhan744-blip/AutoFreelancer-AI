@@ -506,7 +506,8 @@ class AiOrchestrationService(
         client: String,
         workerName: String,
         workerRole: String,
-        leads: List<ProspectResult>
+        leads: List<ProspectResult>,
+        paymentLinkUrl: String = ""
     ): Result<AiGenerationResult> {
         val systemPrompt = """
             You are $workerName, acting as an elite $workerRole in the AutoFreelancer AI agency.
@@ -543,7 +544,7 @@ class AiOrchestrationService(
             4. Make it ready to deliver immediately.
         """.trimIndent()
 
-        return generateContentWithFallback(
+        val genResult = generateContentWithFallback(
             geminiApiKey = geminiApiKey,
             openRouterApiKey = openRouterApiKey,
             geminiModel = geminiModel,
@@ -552,5 +553,13 @@ class AiOrchestrationService(
             userPrompt = userPrompt,
             maxTokens = 1500
         )
+
+        return if (genResult.isSuccess && paymentLinkUrl.isNotBlank()) {
+            val gen = genResult.getOrThrow()
+            val cta = "\n\nTo get the full SEO audit report, please complete the payment here: ${paymentLinkUrl.trim()}"
+            Result.success(gen.copy(content = gen.content + cta))
+        } else {
+            genResult
+        }
     }
 }

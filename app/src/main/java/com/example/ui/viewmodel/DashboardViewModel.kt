@@ -12,14 +12,28 @@ import com.example.data.service.GeneratedPitch
 import com.example.data.service.ResendEmailService
 import com.example.data.service.SearchExecutionResult
 import com.example.data.service.SearchProspectService
+import com.example.data.model.CrmClient
+import com.example.data.repository.ClientRepository
+import com.example.data.service.SeoAuditService
+import com.example.data.service.SeoReportResult
+import android.content.Context
+import com.example.worker.AutoPilotScheduler
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.util.UUID
+import com.example.data.model.InboxEmail
+import com.example.data.repository.InboxRepository
+import com.example.data.service.AiCloserService
+import com.example.data.service.ElevenLabsVoiceService
+import com.example.data.service.GeneratedVoiceNote
+import com.example.data.service.EmailAttachment
+import kotlinx.coroutines.flow.first
 
 sealed interface TasksUiState {
     object Loading : TasksUiState
@@ -53,13 +67,32 @@ data class LeadDiscoveryProgress(
 class DashboardViewModel(
     private val repository: TaskRepository,
     private val settingsRepository: SettingsRepository,
+    private val clientRepository: ClientRepository? = null,
+    private val inboxRepository: InboxRepository? = null,
     private val searchService: SearchProspectService = SearchProspectService(),
     private val aiService: AiOrchestrationService = AiOrchestrationService(),
-    private val emailService: ResendEmailService = ResendEmailService()
+    private val emailService: ResendEmailService = ResendEmailService(),
+    private val seoAuditService: SeoAuditService = SeoAuditService(),
+    private val elevenLabsService: ElevenLabsVoiceService = ElevenLabsVoiceService(),
+    private val closerService: AiCloserService = AiCloserService()
 ) : ViewModel() {
 
-    private val _currentScreen = MutableStateFlow("DASHBOARD") // "DASHBOARD" or "SETTINGS"
+    private val _currentScreen = MutableStateFlow("DASHBOARD") // "DASHBOARD", "INBOX", "CLIENTS", "DELIVERABLES", "SETTINGS"
     val currentScreen: StateFlow<String> = _currentScreen.asStateFlow()
+
+    val clients: StateFlow<List<CrmClient>> = (clientRepository?.observeClients() ?: MutableStateFlow(emptyList()))
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+
+    val inboxEmails: StateFlow<List<InboxEmail>> = (inboxRepository?.observeInbox() ?: MutableStateFlow(emptyList()))
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
 
     val settings: StateFlow<AppSettings> = settingsRepository.settingsFlow
 
@@ -164,8 +197,30 @@ class DashboardViewModel(
             initialValue = DashboardMetrics()
         )
 
+    val isAutoPilotActive: StateFlow<Boolean> = settings
+        .map { it.autoPilotEnabled }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            initialValue = settings.value.autoPilotEnabled
+        )
+
     init {
-        // App starts with a clean, empty state ("No tasks yet" and $0.00 revenue)
+        // Reactive Auto-Pilot engine: when auto-pilot is ON, automatically approve and execute pending tasks
+        viewModelScope.launch {
+            combine(settings, repository.observeTasks()) { currentSettings, tasks ->
+                Pair(currentSettings, tasks)
+            }.collect { (currentSettings, tasks) ->
+                if (currentSettings.autoPilotEnabled && !_isOperationLoading.value) {
+                    val pendingTasks = tasks.filter { it.status == "PENDING" }
+                    if (pendingTasks.isNotEmpty()) {
+                        for (task in pendingTasks) {
+                            approveTask(task)
+                        }
+                    }
+                }
+            }
+        }
     }
 
     fun navigateTo(screen: String) {
@@ -176,8 +231,20 @@ class DashboardViewModel(
         // Real tasks are observed reactively from repository
     }
 
-    fun saveSettings(newSettings: AppSettings) {
+    fun saveSettings(newSettings: AppSettings, context: Context? = null) {
+        val previous = settings.value
         settingsRepository.saveSettings(newSettings)
+        if (context != null && previous.autoPilotEnabled != newSettings.autoPilotEnabled) {
+            AutoPilotScheduler.schedule(context, newSettings.autoPilotEnabled)
+        }
+    }
+
+    fun toggleAutoPilot(enabled: Boolean, context: Context? = null) {
+        val updated = settings.value.copy(autoPilotEnabled = enabled)
+        settingsRepository.saveSettings(updated)
+        if (context != null) {
+            AutoPilotScheduler.schedule(context, enabled)
+        }
     }
 
     fun onSearchQueryChanged(query: String) {
@@ -332,7 +399,8 @@ class DashboardViewModel(
                         client = task.client,
                         workerName = task.workerName,
                         workerRole = task.workerRole,
-                        leads = searchResult.leads
+                        leads = searchResult.leads,
+                        paymentLinkUrl = currentConfig.paymentLinkUrl
                     )
 
                     if (aiResult.isSuccess) {
@@ -397,7 +465,7 @@ class DashboardViewModel(
                                     repository.updateTaskStatus(
                                         taskId = task.id,
                                         newStatus = "COMPLETED",
-                                        newLog = "Proposal emailed to $targetEmail via Resend (ID: ${sent.emailId})"
+                                        newLog = "Email sent successfully via Resend"
                                     )
                                 } else {
                                     val err = emailRes.exceptionOrNull()?.message ?: "Unknown delivery error"
@@ -411,16 +479,37 @@ class DashboardViewModel(
                                 repository.updateTaskStatus(
                                     taskId = task.id,
                                     newStatus = "COMPLETED",
-                                    newLog = "Proposal ready. No recipient email specified yet — click 'Send Email' in task details to dispatch."
+                                    newLog = "Error: Client email is missing. Please provide client email to send proposal."
                                 )
                             }
                         } else {
-                            repository.updateTaskStatus(
-                                taskId = task.id,
-                                newStatus = "COMPLETED",
-                                newLog = "Proposal ready. Add a Resend API Key in Settings to enable automated email dispatch."
-                            )
+                            if (targetEmail.isBlank()) {
+                                repository.updateTaskStatus(
+                                    taskId = task.id,
+                                    newStatus = "COMPLETED",
+                                    newLog = "Error: Client email is missing. Please provide client email to send proposal."
+                                )
+                            } else {
+                                repository.updateTaskStatus(
+                                    taskId = task.id,
+                                    newStatus = "COMPLETED",
+                                    newLog = "Proposal ready. Add a Resend API Key in Settings to enable automated email dispatch."
+                                )
+                            }
                         }
+
+                        // Feature 3: Automatically persist lead into CRM (Firestore & Local)
+                        val crmClient = CrmClient(
+                            name = task.client,
+                            company = task.category,
+                            websiteUrl = searchResult.leads.firstOrNull()?.link.orEmpty(),
+                            email = targetEmail,
+                            status = "Pitched",
+                            leadSource = "AI Worker",
+                            pitchMessage = aiContent,
+                            estimatedValue = task.estimatedValue
+                        )
+                        clientRepository?.upsertClient(crmClient)
                     } else {
                         val err = aiResult.exceptionOrNull()?.message ?: "AI generation failed"
                         repository.updateTaskStatus(
@@ -448,6 +537,7 @@ class DashboardViewModel(
     fun sendTaskEmail(
         task: Task,
         recipientEmail: String,
+        voiceNote: GeneratedVoiceNote? = null,
         onResult: (Boolean, String) -> Unit
     ) {
         viewModelScope.launch {
@@ -461,7 +551,12 @@ class DashboardViewModel(
 
             val target = recipientEmail.trim().ifBlank { task.clientEmail.trim() }
             if (target.isBlank()) {
-                onResult(false, "Please enter a valid recipient email address.")
+                repository.updateTaskStatus(
+                    taskId = task.id,
+                    newStatus = task.status,
+                    newLog = "Error: Client email is missing. Please provide client email to send proposal."
+                )
+                onResult(false, "Error: Client email is missing. Please provide client email to send proposal.")
                 return@launch
             }
 
@@ -477,11 +572,18 @@ class DashboardViewModel(
                 newLog = "Manually sending proposal email via Resend to $target..."
             )
 
+            val attachments = if (voiceNote != null) {
+                listOf(EmailAttachment(filename = voiceNote.fileName, contentBase64 = voiceNote.base64Content))
+            } else {
+                emptyList()
+            }
+
             val result = emailService.sendEmail(
                 apiKey = resendKey,
                 toEmail = target,
                 subject = "SEO Audit & Growth Proposal: ${task.title}",
-                bodyText = contentToSend
+                bodyText = contentToSend,
+                attachments = attachments
             )
 
             if (result.isSuccess) {
@@ -489,9 +591,9 @@ class DashboardViewModel(
                 repository.updateTaskStatus(
                     taskId = task.id,
                     newStatus = task.status,
-                    newLog = "Proposal emailed to $target via Resend (ID: ${sent.emailId})"
+                    newLog = "Email sent successfully via Resend"
                 )
-                onResult(true, "Proposal sent to $target successfully (ID: ${sent.emailId.take(8)}...)")
+                onResult(true, "Email sent successfully via Resend (ID: ${sent.emailId.take(8)}...)")
             } else {
                 val err = result.exceptionOrNull()?.message ?: "Failed to deliver email"
                 repository.updateTaskStatus(
@@ -729,6 +831,10 @@ class DashboardViewModel(
                     }
                 }
 
+                if (currentConfig.paymentLinkUrl.isNotBlank()) {
+                    aiText += "\n\nTo get the full SEO audit report, please complete the payment here: ${currentConfig.paymentLinkUrl.trim()}"
+                }
+
                 val pitch = GeneratedPitch(
                     prospectNameOrCompany = prospect.sourcePlatform,
                     subjectLine = "Personalized SEO Audit Proposal for ${prospect.title.take(30)}",
@@ -770,6 +876,19 @@ class DashboardViewModel(
                     )
                 )
                 repository.createTask(task)
+
+                // Feature 3: Automatically persist discovered prospect into CRM
+                val crmLead = CrmClient(
+                    name = prospect.title.take(40),
+                    company = prospect.sourcePlatform,
+                    websiteUrl = prospect.link,
+                    email = discoveredEmail,
+                    status = "Pitched",
+                    leadSource = prospect.sourcePlatform,
+                    pitchMessage = pitch.personalizedPitchMessage,
+                    estimatedValue = 0.0
+                )
+                clientRepository?.upsertClient(crmLead)
             }
 
             _discoveryProgress.value = LeadDiscoveryProgress(
@@ -778,6 +897,389 @@ class DashboardViewModel(
                 prospects = prospects,
                 generatedPitches = generatedPitches
             )
+        }
+    }
+
+    // ==========================================
+    // CRM (Client Database) & Deliverables Logic
+    // ==========================================
+
+    fun updateClientStatus(clientId: String, newStatus: String) {
+        viewModelScope.launch {
+            clientRepository?.updateClientStatus(clientId, newStatus)
+        }
+    }
+
+    fun updateClientReport(clientId: String, report: String) {
+        viewModelScope.launch {
+            clientRepository?.updateClientReport(clientId, report)
+        }
+    }
+
+    fun upsertClient(client: CrmClient) {
+        viewModelScope.launch {
+            clientRepository?.upsertClient(client)
+        }
+    }
+
+    fun generateSeoReportForClient(
+        client: CrmClient,
+        onResult: (Boolean, SeoReportResult?, String) -> Unit
+    ) {
+        viewModelScope.launch {
+            _isOperationLoading.value = true
+            val config = settings.value
+            val result = seoAuditService.generate5PointAuditReport(
+                rawUrl = client.websiteUrl,
+                geminiApiKey = config.geminiApiKey,
+                openRouterApiKey = config.openRouterApiKey,
+                geminiModel = config.geminiModel,
+                openRouterModel = config.openRouterModel,
+                clientName = client.name,
+                paymentLinkUrl = config.paymentLinkUrl
+            )
+            _isOperationLoading.value = false
+            if (result.isSuccess) {
+                val reportResult = result.getOrThrow()
+                // Update client in CRM
+                val updatedClient = client.copy(
+                    seoReport = reportResult.generatedReport,
+                    updatedAt = System.currentTimeMillis()
+                )
+                clientRepository?.upsertClient(updatedClient)
+                onResult(true, reportResult, "Report generated successfully via ${reportResult.engineUsed}")
+            } else {
+                val err = result.exceptionOrNull()?.message ?: "Failed to generate report"
+                onResult(false, null, err)
+            }
+        }
+    }
+
+    fun generateSeoReportForUrl(
+        url: String,
+        clientName: String = "Client",
+        clientEmail: String = "",
+        onResult: (Boolean, SeoReportResult?, String) -> Unit
+    ) {
+        viewModelScope.launch {
+            _isOperationLoading.value = true
+            val config = settings.value
+            val result = seoAuditService.generate5PointAuditReport(
+                rawUrl = url,
+                geminiApiKey = config.geminiApiKey,
+                openRouterApiKey = config.openRouterApiKey,
+                geminiModel = config.geminiModel,
+                openRouterModel = config.openRouterModel,
+                clientName = clientName,
+                paymentLinkUrl = config.paymentLinkUrl
+            )
+            _isOperationLoading.value = false
+            if (result.isSuccess) {
+                val reportResult = result.getOrThrow()
+                // Save lead in CRM automatically
+                val crmLead = CrmClient(
+                    name = clientName.ifBlank { "Website Lead" },
+                    company = url.substringAfter("://").substringBefore("/").take(30),
+                    websiteUrl = url,
+                    email = clientEmail.trim(),
+                    status = "Pitched",
+                    leadSource = "SEO Audit Tool",
+                    seoReport = reportResult.generatedReport,
+                    estimatedValue = 0.0
+                )
+                clientRepository?.upsertClient(crmLead)
+                onResult(true, reportResult, "Report generated successfully via ${reportResult.engineUsed}")
+            } else {
+                val err = result.exceptionOrNull()?.message ?: "Failed to generate SEO report"
+                onResult(false, null, err)
+            }
+        }
+    }
+
+    fun sendEmailToClient(
+        toEmail: String,
+        subject: String,
+        bodyText: String,
+        onResult: (Boolean, String) -> Unit
+    ) {
+        viewModelScope.launch {
+            val resendKey = settings.value.resendApiKey
+            if (resendKey.isBlank()) {
+                onResult(false, "Please configure your Resend API Key in Settings first.")
+                return@launch
+            }
+            if (toEmail.isBlank()) {
+                onResult(false, "Error: Client email is missing. Please provide client email to send proposal.")
+                return@launch
+            }
+            val res = emailService.sendEmail(
+                apiKey = resendKey,
+                toEmail = toEmail,
+                subject = subject,
+                bodyText = bodyText
+            )
+            if (res.isSuccess) {
+                onResult(true, "Email sent successfully via Resend")
+            } else {
+                val err = res.exceptionOrNull()?.message ?: "Failed to deliver email"
+                onResult(false, "Resend delivery error: $err")
+            }
+        }
+    }
+
+    // ==========================================
+    // Feature 1: Jarvis Voice Command Actions
+    // ==========================================
+
+    fun approveAllPendingTasks(onResult: ((Int) -> Unit)? = null) {
+        viewModelScope.launch {
+            val allTasks = repository.observeTasks().first()
+            val pendingTasks = allTasks.filter { it.status == "PENDING" }
+            for (task in pendingTasks) {
+                approveTask(task)
+            }
+            onResult?.invoke(pendingTasks.size)
+        }
+    }
+
+    // ==========================================
+    // Feature 2: ElevenLabs AI Voice Notes
+    // ==========================================
+
+    fun generateVoiceNoteForText(
+        context: Context,
+        text: String,
+        outputFileName: String? = null,
+        onResult: (Boolean, GeneratedVoiceNote?, String) -> Unit
+    ) {
+        viewModelScope.launch {
+            _isOperationLoading.value = true
+            val config = settings.value
+            val res = elevenLabsService.textToSpeech(
+                context = context,
+                apiKey = config.elevenLabsApiKey,
+                text = text,
+                voiceId = config.elevenLabsVoiceId,
+                outputFileName = outputFileName
+            )
+            _isOperationLoading.value = false
+            if (res.isSuccess) {
+                val voiceNote = res.getOrThrow()
+                onResult(true, voiceNote, "AI Voice note generated (${voiceNote.fileSizeKb} KB)")
+            } else {
+                val err = res.exceptionOrNull()?.message ?: "Voice note generation failed"
+                onResult(false, null, err)
+            }
+        }
+    }
+
+    fun testElevenLabsKey(apiKey: String, onResult: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            val res = elevenLabsService.testConnection(apiKey)
+            if (res.isSuccess) {
+                onResult(true, res.getOrThrow())
+            } else {
+                onResult(false, res.exceptionOrNull()?.message ?: "ElevenLabs authentication failed")
+            }
+        }
+    }
+
+    fun sendEmailWithVoiceNote(
+        toEmail: String,
+        subject: String,
+        bodyText: String,
+        voiceNote: GeneratedVoiceNote? = null,
+        onResult: (Boolean, String) -> Unit
+    ) {
+        viewModelScope.launch {
+            val resendKey = settings.value.resendApiKey
+            if (resendKey.isBlank()) {
+                onResult(false, "Please configure your Resend API Key in Settings first.")
+                return@launch
+            }
+            if (toEmail.isBlank()) {
+                onResult(false, "Error: Client email is missing. Please provide client email to send proposal.")
+                return@launch
+            }
+
+            val attachments = if (voiceNote != null) {
+                listOf(EmailAttachment(filename = voiceNote.fileName, contentBase64 = voiceNote.base64Content))
+            } else {
+                emptyList()
+            }
+
+            val res = emailService.sendEmail(
+                apiKey = resendKey,
+                toEmail = toEmail,
+                subject = subject,
+                bodyText = bodyText,
+                attachments = attachments
+            )
+            if (res.isSuccess) {
+                onResult(true, "Email sent successfully via Resend" + if (voiceNote != null) " with AI Voice Note" else "")
+            } else {
+                val err = res.exceptionOrNull()?.message ?: "Failed to deliver email"
+                onResult(false, "Resend delivery error: $err")
+            }
+        }
+    }
+
+    // ==========================================
+    // Feature 3: The AI Closer (Auto-Reply to Inbound Emails)
+    // ==========================================
+
+    fun draftObjectionReply(
+        senderName: String,
+        senderEmail: String,
+        subject: String,
+        incomingMessage: String,
+        onResult: (Boolean, InboxEmail?, String) -> Unit
+    ) {
+        viewModelScope.launch {
+            _isOperationLoading.value = true
+            val config = settings.value
+            val res = closerService.analyzeAndDraftReply(
+                senderName = senderName,
+                senderEmail = senderEmail,
+                subject = subject,
+                incomingMessage = incomingMessage,
+                geminiApiKey = config.geminiApiKey,
+                openRouterApiKey = config.openRouterApiKey,
+                geminiModel = config.geminiModel,
+                openRouterModel = config.openRouterModel,
+                paymentLinkUrl = config.paymentLinkUrl
+            )
+            _isOperationLoading.value = false
+            if (res.isSuccess) {
+                val result = res.getOrThrow()
+                val newEmail = InboxEmail(
+                    senderName = senderName,
+                    senderEmail = senderEmail,
+                    subject = subject,
+                    incomingMessage = incomingMessage,
+                    objectionCategory = result.objectionCategory,
+                    draftedReply = result.draftedReply,
+                    status = "Awaiting Review"
+                )
+                inboxRepository?.upsertMessage(newEmail)
+                onResult(true, newEmail, "Objection analyzed by Gemini (${result.objectionCategory})")
+            } else {
+                val err = res.exceptionOrNull()?.message ?: "AI Closer failed"
+                onResult(false, null, err)
+            }
+        }
+    }
+
+    fun approveAndSendInboxReply(
+        email: InboxEmail,
+        voiceNote: GeneratedVoiceNote? = null,
+        onResult: (Boolean, String) -> Unit
+    ) {
+        viewModelScope.launch {
+            val resendKey = settings.value.resendApiKey
+            if (resendKey.isBlank()) {
+                onResult(false, "Please configure your Resend API Key in Settings first.")
+                return@launch
+            }
+            if (email.senderEmail.isBlank()) {
+                onResult(false, "Error: Client email is missing. Please provide client email to send proposal.")
+                return@launch
+            }
+
+            val attachments = if (voiceNote != null) {
+                listOf(EmailAttachment(filename = voiceNote.fileName, contentBase64 = voiceNote.base64Content))
+            } else {
+                emptyList()
+            }
+
+            val res = emailService.sendEmail(
+                apiKey = resendKey,
+                toEmail = email.senderEmail,
+                subject = "Re: ${email.subject}",
+                bodyText = email.draftedReply,
+                attachments = attachments
+            )
+
+            if (res.isSuccess) {
+                inboxRepository?.markApprovedAndSent(email.id)
+                onResult(true, "Email sent successfully via Resend")
+            } else {
+                val err = res.exceptionOrNull()?.message ?: "Delivery failed"
+                onResult(false, "Resend delivery error: $err")
+            }
+        }
+    }
+
+    fun updateInboxDraft(messageId: String, newDraft: String) {
+        viewModelScope.launch {
+            inboxRepository?.updateDraftedReply(messageId, newDraft)
+        }
+    }
+
+    fun dismissInboxEmail(messageId: String) {
+        viewModelScope.launch {
+            inboxRepository?.dismissMessage(messageId)
+        }
+    }
+
+    fun simulateIncomingClientObjection(scenarioType: String = "Budget") {
+        viewModelScope.launch {
+            val scenario = when (scenarioType.lowercase()) {
+                "budget" -> Triple(
+                    "Marcus Vance",
+                    "marcus@vancestore.com",
+                    "Your audit proposal looks high - our budget is only $200 right now. Can you discount?"
+                )
+                "timing" -> Triple(
+                    "Elena Rostova",
+                    "elena@growthcloud.io",
+                    "We're slammed with Q4 inventory right now. Can we talk about this next quarter?"
+                )
+                "trust" -> Triple(
+                    "David Miller",
+                    "david@millerlaw.com",
+                    "We hired an SEO freelancer last year who delivered zero ranking improvements. How do I know this will work?"
+                )
+                else -> Triple(
+                    "Sarah Jenkins",
+                    "sarah@ecoboutique.com",
+                    "We already have an internal content writer. What value does a technical audit add?"
+                )
+            }
+
+            draftObjectionReply(
+                senderName = scenario.first,
+                senderEmail = scenario.second,
+                subject = "Re: SEO Audit Proposal",
+                incomingMessage = scenario.third
+            ) { _, _, _ -> }
+        }
+    }
+
+    fun fetchWebhookInboundEmails(onResult: (Boolean, Int, String) -> Unit) {
+        viewModelScope.launch {
+            val webhookUrl = settings.value.inboundEmailWebhookUrl
+            if (webhookUrl.isBlank()) {
+                onResult(false, 0, "No Webhook URL configured in Settings.")
+                return@launch
+            }
+            _isOperationLoading.value = true
+            val res = closerService.fetchInboundEmailsFromWebhook(webhookUrl)
+            _isOperationLoading.value = false
+            if (res.isSuccess) {
+                val list = res.getOrThrow()
+                for (item in list) {
+                    draftObjectionReply(
+                        senderName = item.senderName,
+                        senderEmail = item.senderEmail,
+                        subject = item.subject,
+                        incomingMessage = item.incomingMessage
+                    ) { _, _, _ -> }
+                }
+                onResult(true, list.size, "Fetched ${list.size} emails from Webhook")
+            } else {
+                onResult(false, 0, res.exceptionOrNull()?.message ?: "Webhook fetch failed")
+            }
         }
     }
 }

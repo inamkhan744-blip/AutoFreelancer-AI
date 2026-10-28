@@ -17,8 +17,13 @@ data class AppSettings(
     val serperApiKey: String = "",
     val tavilyApiKey: String = "",
     val resendApiKey: String = "",
+    val paymentLinkUrl: String = "",
+    val autoPilotEnabled: Boolean = false,
     val searchQuery: String = "looking for SEO audit OR \"need an SEO audit\" site:linkedin.com OR site:reddit.com OR site:x.com",
-    val autoRunOnApproval: Boolean = true
+    val autoRunOnApproval: Boolean = true,
+    val elevenLabsApiKey: String = "",
+    val elevenLabsVoiceId: String = "21m00Tcm4TlvDq8ikWAM", // Rachel default voice
+    val inboundEmailWebhookUrl: String = ""
 ) {
     val isGeminiConfigured: Boolean
         get() = geminiApiKey.isNotBlank()
@@ -34,6 +39,15 @@ data class AppSettings(
 
     val isResendConfigured: Boolean
         get() = resendApiKey.isNotBlank()
+
+    val isPaymentLinkConfigured: Boolean
+        get() = paymentLinkUrl.isNotBlank()
+
+    val isElevenLabsConfigured: Boolean
+        get() = elevenLabsApiKey.isNotBlank()
+
+    val isWebhookConfigured: Boolean
+        get() = inboundEmailWebhookUrl.isNotBlank()
 }
 
 class SettingsRepository(context: Context) {
@@ -88,11 +102,16 @@ class SettingsRepository(context: Context) {
             serperApiKey = securePrefs.getString("serper_api_key", "").orEmpty(),
             tavilyApiKey = securePrefs.getString("tavily_api_key", "").orEmpty(),
             resendApiKey = storedResend,
+            paymentLinkUrl = securePrefs.getString("payment_link_url", "").orEmpty(),
+            autoPilotEnabled = securePrefs.getBoolean("auto_pilot_enabled", false),
             searchQuery = securePrefs.getString(
                 "search_query",
                 "looking for SEO audit OR \"need an SEO audit\" site:linkedin.com OR site:reddit.com OR site:x.com"
             ) ?: "looking for SEO audit",
-            autoRunOnApproval = securePrefs.getBoolean("auto_run_approval", true)
+            autoRunOnApproval = securePrefs.getBoolean("auto_run_approval", true),
+            elevenLabsApiKey = securePrefs.getString("elevenlabs_api_key", "").orEmpty(),
+            elevenLabsVoiceId = securePrefs.getString("elevenlabs_voice_id", "21m00Tcm4TlvDq8ikWAM").orEmpty().ifBlank { "21m00Tcm4TlvDq8ikWAM" },
+            inboundEmailWebhookUrl = securePrefs.getString("inbound_webhook_url", "").orEmpty()
         )
     }
 
@@ -106,8 +125,13 @@ class SettingsRepository(context: Context) {
             .putString("tavily_api_key", settings.tavilyApiKey.trim())
             .putString("resend_api_key", settings.resendApiKey.trim())
             .putString("email_api_key", settings.resendApiKey.trim())
+            .putString("payment_link_url", settings.paymentLinkUrl.trim())
+            .putBoolean("auto_pilot_enabled", settings.autoPilotEnabled)
             .putString("search_query", settings.searchQuery.trim())
             .putBoolean("auto_run_approval", settings.autoRunOnApproval)
+            .putString("elevenlabs_api_key", settings.elevenLabsApiKey.trim())
+            .putString("elevenlabs_voice_id", settings.elevenLabsVoiceId.trim())
+            .putString("inbound_webhook_url", settings.inboundEmailWebhookUrl.trim())
             .remove("groq_api_key")
             .remove("groq_model")
             .apply()

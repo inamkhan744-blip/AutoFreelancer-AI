@@ -61,4 +61,21 @@ class AiOrchestrationServiceTest {
         assertEquals("gemini-3.8-flash", AiOrchestrationService.PRIMARY_GEMINI_MODEL)
         assertEquals("meta-llama/llama-3.3-70b-instruct:free", AiOrchestrationService.FALLBACK_OPENROUTER_MODEL)
     }
+
+    @Test
+    fun generateTaskDeliverable_bothKeysBlank_failsGracefully() = runBlocking {
+        val result = service.generateTaskDeliverable(
+            geminiApiKey = "",
+            openRouterApiKey = "",
+            taskTitle = "SEO Technical Audit",
+            category = "Deliverable",
+            client = "TestClient Corp",
+            workerName = "Apollo-Scout",
+            workerRole = "Lead Generation Specialist",
+            leads = emptyList(),
+            paymentLinkUrl = "https://buy.stripe.com/test12345"
+        )
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull()?.message?.contains("AI Generation Failed") == true)
+    }
 }
