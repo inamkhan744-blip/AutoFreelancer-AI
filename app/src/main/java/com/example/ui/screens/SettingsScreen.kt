@@ -66,6 +66,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -117,21 +118,39 @@ fun SettingsScreen(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
-    // Form inputs initialized from the current cloud settings state
-    var geminiApiKey by remember(currentSettings) { mutableStateOf(currentSettings.geminiApiKey) }
-    var openRouterApiKey by remember(currentSettings) { mutableStateOf(currentSettings.openRouterApiKey) }
-    var geminiModel by remember(currentSettings) { mutableStateOf(currentSettings.geminiModel) }
-    var openRouterModel by remember(currentSettings) { mutableStateOf(currentSettings.openRouterModel) }
-    var brevoApiKey by remember(currentSettings) { mutableStateOf(currentSettings.brevoApiKey) }
-    var serperApiKey by remember(currentSettings) { mutableStateOf(currentSettings.serperApiKey) }
-    var tavilyApiKey by remember(currentSettings) { mutableStateOf(currentSettings.tavilyApiKey) }
-    var paymentLinkUrl by remember(currentSettings) { mutableStateOf(currentSettings.paymentLinkUrl) }
-    var autoPilotEnabled by remember(currentSettings) { mutableStateOf(currentSettings.autoPilotEnabled) }
-    var searchQuery by remember(currentSettings) { mutableStateOf(currentSettings.searchQuery) }
-    var autoRunOnApproval by remember(currentSettings) { mutableStateOf(currentSettings.autoRunOnApproval) }
-    var elevenLabsApiKey by remember(currentSettings) { mutableStateOf(currentSettings.elevenLabsApiKey) }
-    var elevenLabsVoiceId by remember(currentSettings) { mutableStateOf(currentSettings.elevenLabsVoiceId) }
-    var inboundEmailWebhookUrl by remember(currentSettings) { mutableStateOf(currentSettings.inboundEmailWebhookUrl) }
+    // Form inputs - Ab yeh LaunchedEffect se update honge taake screen change par reset na hon
+    var geminiApiKey by remember { mutableStateOf(currentSettings.geminiApiKey) }
+    var openRouterApiKey by remember { mutableStateOf(currentSettings.openRouterApiKey) }
+    var geminiModel by remember { mutableStateOf(currentSettings.geminiModel) }
+    var openRouterModel by remember { mutableStateOf(currentSettings.openRouterModel) }
+    var brevoApiKey by remember { mutableStateOf(currentSettings.brevoApiKey) }
+    var serperApiKey by remember { mutableStateOf(currentSettings.serperApiKey) }
+    var tavilyApiKey by remember { mutableStateOf(currentSettings.tavilyApiKey) }
+    var paymentLinkUrl by remember { mutableStateOf(currentSettings.paymentLinkUrl) }
+    var autoPilotEnabled by remember { mutableStateOf(currentSettings.autoPilotEnabled) }
+    var searchQuery by remember { mutableStateOf(currentSettings.searchQuery) }
+    var autoRunOnApproval by remember { mutableStateOf(currentSettings.autoRunOnApproval) }
+    var elevenLabsApiKey by remember { mutableStateOf(currentSettings.elevenLabsApiKey) }
+    var elevenLabsVoiceId by remember { mutableStateOf(currentSettings.elevenLabsVoiceId) }
+    var inboundEmailWebhookUrl by remember { mutableStateOf(currentSettings.inboundEmailWebhookUrl) }
+
+    // Yeh fix hai: Jab bhi cloud se data aayega, yeh saare boxes ko update kar dega
+    LaunchedEffect(currentSettings) {
+        geminiApiKey = currentSettings.geminiApiKey
+        openRouterApiKey = currentSettings.openRouterApiKey
+        geminiModel = currentSettings.geminiModel
+        openRouterModel = currentSettings.openRouterModel
+        brevoApiKey = currentSettings.brevoApiKey
+        serperApiKey = currentSettings.serperApiKey
+        tavilyApiKey = currentSettings.tavilyApiKey
+        paymentLinkUrl = currentSettings.paymentLinkUrl
+        autoPilotEnabled = currentSettings.autoPilotEnabled
+        searchQuery = currentSettings.searchQuery
+        autoRunOnApproval = currentSettings.autoRunOnApproval
+        elevenLabsApiKey = currentSettings.elevenLabsApiKey
+        elevenLabsVoiceId = currentSettings.elevenLabsVoiceId
+        inboundEmailWebhookUrl = currentSettings.inboundEmailWebhookUrl
+    }
 
     // Dropdown toggles
     var geminiDropdownExpanded by remember { mutableStateOf(false) }
