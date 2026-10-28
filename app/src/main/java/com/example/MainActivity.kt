@@ -52,15 +52,9 @@ import com.example.ui.theme.CyberPrimary
 import com.example.ui.theme.CyberSecondary
 import com.example.ui.theme.CyberTertiary
 import com.example.ui.viewmodel.DashboardViewModel
-import com.google.firebase.Firebase
-import com.google.firebase.auth.auth
-import com.google.firebase.auth.FirebaseAuth
 
 class MainActivity : ComponentActivity() {
-    private var isAuthenticated by mutableStateOf(true)
     private var startupError by mutableStateOf(AppStartupState.errorMessage)
-    private var firebaseAuth: FirebaseAuth? = null
-    private var authStateListener: FirebaseAuth.AuthStateListener? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -68,56 +62,21 @@ class MainActivity : ComponentActivity() {
         try {
             com.example.util.configureAppCheck(this, intent)
             enableEdgeToEdge()
-            firebaseAuth = Firebase.auth
-            isAuthenticated = firebaseAuth?.currentUser != null
-            authStateListener = FirebaseAuth.AuthStateListener { auth ->
-                try {
-                    isAuthenticated = auth.currentUser != null
-                } catch (error: Exception) {
-                    showStartupError(error)
-                }
-            }
-            if (isAuthenticated && SettingsRepository(this).settingsFlow.value.autoPilotEnabled) {
-                com.example.worker.AutoPilotScheduler.schedule(this, true)
-            }
         } catch (error: Exception) {
             showStartupError(error)
         }
 
-        // Naya saaf setContent block (bina try-catch ke, kyunki Compose mein ye allowed nahi hai)
         setContent {
             AutoFreelancerTheme {
-                val error = startupError ?: AppStartupState.errorMessage
+                val error = startupError
                 if (error != null) {
                     StartupErrorScreen(error)
-                } else if (isAuthenticated) {
-                    AppRootContent()
                 } else {
-                    AuthScreen(onAuthSuccess = { isAuthenticated = true })
+                    // DIRECTLY OPENING DASHBOARD - LOGIN BYPASSED
+                    AppRootContent()
                 }
             }
         }
-    }
-
-    override fun onStart() {
-        super.onStart()
-        try {
-            val auth = firebaseAuth ?: return
-            authStateListener?.let(auth::addAuthStateListener)
-        } catch (error: Exception) {
-            showStartupError(error)
-        }
-    }
-
-    override fun onStop() {
-        try {
-            val auth = firebaseAuth
-            val listener = authStateListener
-            if (auth != null && listener != null) auth.removeAuthStateListener(listener)
-        } catch (error: Exception) {
-            Log.w("MainActivity", "Unable to remove Firebase auth listener", error)
-        }
-        super.onStop()
     }
 
     private fun showStartupError(error: Throwable) {
