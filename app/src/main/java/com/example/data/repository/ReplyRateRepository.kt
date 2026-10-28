@@ -85,12 +85,12 @@ class ReplyRateRepository(
 
         fun bestToneFromOutcomes(outcomes: List<Pair<OutreachTone, Boolean>>): OutreachTone {
             if (outcomes.isEmpty()) return OutreachTone.PROFESSIONAL
-            val rates = OutreachTone.associateWith { tone ->
-                val toneOutcomes = outcomes.filter { it.first == tone }
+            val rates: Map<OutreachTone, Double?> = OutreachTone.values().toList().associate { tone: OutreachTone ->
+                val toneOutcomes: List<Pair<OutreachTone, Boolean>> = outcomes.filter { outcome -> outcome.first == tone }
                 if (toneOutcomes.isEmpty()) null else toneOutcomes.count { it.second }.toDouble() / toneOutcomes.size
             }
             val bestRate = rates.values.filterNotNull().maxOrNull() ?: return OutreachTone.PROFESSIONAL
-            val leaders = rates.filterValues { it == bestRate }.keys
+            val leaders: List<OutreachTone> = rates.filterValues { rate -> rate == bestRate }.keys.toList()
             return if (OutreachTone.PROFESSIONAL in leaders) OutreachTone.PROFESSIONAL else leaders.first()
         }
     }
