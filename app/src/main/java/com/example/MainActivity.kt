@@ -67,15 +67,17 @@ class MainActivity : ComponentActivity() {
         try {
             com.example.util.configureAppCheck(this, intent)
             enableEdgeToEdge()
-            firebaseAuth = Firebase.auth
+            firebaseAuth = runCatching { Firebase.auth }
+                .onFailure { Log.w("MainActivity", "Firebase Auth unavailable; showing sign-in screen.", it) }
+                .getOrNull()
             isAuthenticated = firebaseAuth?.currentUser != null
-            authStateListener = FirebaseAuth.AuthStateListener { auth ->
+            authStateListener = firebaseAuth?.let { FirebaseAuth.AuthStateListener { auth ->
                 try {
                     isAuthenticated = auth.currentUser != null
                 } catch (error: Exception) {
                     showStartupError(error)
                 }
-            }
+            } }
             if (isAuthenticated && SettingsRepository(this).settingsFlow.value.autoPilotEnabled) {
                 com.example.worker.AutoPilotScheduler.schedule(this, true)
             }
@@ -88,7 +90,7 @@ class MainActivity : ComponentActivity() {
                 val error = startupError ?: AppStartupState.errorMessage
                 if (error != null) {
                     StartupErrorScreen(error)
-                } else if (isAuthenticated) {
+                } else if (isAuthenticated || firebaseAuth == null) {
                     AppRootContent()
                 } else {
                     AuthScreen(onAuthSuccess = { isAuthenticated = true })
