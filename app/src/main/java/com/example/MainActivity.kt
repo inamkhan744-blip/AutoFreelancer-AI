@@ -83,32 +83,17 @@ class MainActivity : ComponentActivity() {
             showStartupError(error)
         }
 
-        try {
-            setContent {
-                AutoFreelancerTheme {
-                    try {
-                        val error = startupError ?: AppStartupState.errorMessage
-                        if (error != null) {
-                            StartupErrorScreen(error)
-                        } else if (isAuthenticated) {
-                            AppRootContent()
-                        } else {
-                            AuthScreen(onAuthSuccess = { isAuthenticated = true })
-                        }
-                    } catch (error: Exception) {
-                        StartupErrorScreen(error.localizedMessage ?: "App initialization failed.")
-                    }
+        setContent {
+            AutoFreelancerTheme {
+                val error = startupError ?: AppStartupState.errorMessage
+                if (error != null) {
+                    StartupErrorScreen(error)
+                } else if (isAuthenticated) {
+                    AppRootContent()
+                } else {
+                    AuthScreen(onAuthSuccess = { isAuthenticated = true })
                 }
             }
-        } catch (error: Exception) {
-            showStartupError(error)
-            runCatching {
-                setContent {
-                    AutoFreelancerTheme {
-                        StartupErrorScreen(startupError ?: "App initialization failed.")
-                    }
-                }
-            }.onFailure { Log.e("MainActivity", "Unable to render startup error", it) }
         }
     }
 
