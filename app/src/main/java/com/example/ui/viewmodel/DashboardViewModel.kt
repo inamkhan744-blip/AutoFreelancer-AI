@@ -9,7 +9,7 @@ import com.example.data.repository.SettingsRepository
 import com.example.data.repository.TaskRepository
 import com.example.data.service.AiOrchestrationService
 import com.example.data.service.GeneratedPitch
-import com.example.data.service.ResendEmailService
+import com.example.data.service.BrevoEmailService
 import com.example.data.service.SearchExecutionResult
 import com.example.data.service.SearchProspectService
 import com.example.data.model.CrmClient
@@ -30,6 +30,7 @@ import java.util.UUID
 import com.example.data.model.InboxEmail
 import com.example.data.repository.InboxRepository
 import com.example.data.service.AiCloserService
+import com.example.util.BusinessEmailValidator
 import com.example.data.service.ElevenLabsVoiceService
 import com.example.data.service.GeneratedVoiceNote
 import com.example.data.service.EmailAttachment
@@ -71,7 +72,7 @@ class DashboardViewModel(
     private val inboxRepository: InboxRepository? = null,
     private val searchService: SearchProspectService = SearchProspectService(),
     private val aiService: AiOrchestrationService = AiOrchestrationService(),
-    private val emailService: ResendEmailService = ResendEmailService(),
+    private val emailService: BrevoEmailService = BrevoEmailService(),
     private val seoAuditService: SeoAuditService = SeoAuditService(),
     private val elevenLabsService: ElevenLabsVoiceService = ElevenLabsVoiceService(),
     private val closerService: AiCloserService = AiCloserService()
@@ -205,7 +206,15 @@ class DashboardViewModel(
             initialValue = settings.value.autoPilotEnabled
         )
 
+    private val _settingsLoadError = MutableStateFlow<String?>(null)
+    val settingsLoadError: StateFlow<String?> = _settingsLoadError.asStateFlow()
+
     init {
+        viewModelScope.launch {
+            runCatching { settingsRepository.loadCloudSettings() }
+                .onFailure { _settingsLoadError.value = it.message ?: "Unable to load cloud settings." }
+        }
+
         // Reactive Auto-Pilot engine: when auto-pilot is ON, automatically approve and execute pending tasks
         viewModelScope.launch {
             combine(settings, repository.observeTasks()) { currentSettings, tasks ->
@@ -231,19 +240,34 @@ class DashboardViewModel(
         // Real tasks are observed reactively from repository
     }
 
-    fun saveSettings(newSettings: AppSettings, context: Context? = null) {
+    fun saveSettings(
+        newSettings: AppSettings,
+        context: Context? = null,
+        onResult: (Boolean, String) -> Unit = { _, _ -> }
+    ) {
         val previous = settings.value
-        settingsRepository.saveSettings(newSettings)
-        if (context != null && previous.autoPilotEnabled != newSettings.autoPilotEnabled) {
-            AutoPilotScheduler.schedule(context, newSettings.autoPilotEnabled)
+        viewModelScope.launch {
+            try {
+                settingsRepository.saveSettings(newSettings)
+                if (context != null && previous.autoPilotEnabled != newSettings.autoPilotEnabled) {
+                    AutoPilotScheduler.schedule(context, newSettings.autoPilotEnabled)
+                }
+                onResult(true, "Settings saved to your Firebase account.")
+            } catch (e: Exception) {
+                onResult(false, e.message ?: "Unable to save settings to Firebase.")
+            }
         }
     }
 
     fun toggleAutoPilot(enabled: Boolean, context: Context? = null) {
         val updated = settings.value.copy(autoPilotEnabled = enabled)
-        settingsRepository.saveSettings(updated)
-        if (context != null) {
-            AutoPilotScheduler.schedule(context, enabled)
+        viewModelScope.launch {
+            try {
+                settingsRepository.saveSettings(updated)
+                if (context != null) AutoPilotScheduler.schedule(context, enabled)
+            } catch (e: Exception) {
+                _settingsLoadError.value = e.message ?: "Unable to save Auto-Pilot settings."
+            }
         }
     }
 
@@ -320,7 +344,7 @@ class DashboardViewModel(
      * 3. Queries live Search API (Serper, with Tavily backup) for real client leads.
      * 4. Passes search context to Google Gemini (with OpenRouter fallback) to generate a personalized outreach message and SEO audit deliverable.
      * 5. Saves real findings and generated content into task details, marks task COMPLETED.
-     * 6. Automatically dispatches the generated proposal via Resend API to the client's email if available and Resend is configured.
+    * 6. Automatically dispatches the generated proposal via Brevo to a valid business email when configured.
      */
     fun approveTask(task: Task) {
         viewModelScope.launch {
@@ -349,7 +373,7 @@ class DashboardViewModel(
                 val openRouterKey = currentConfig.openRouterApiKey
                 val geminiModel = currentConfig.geminiModel
                 val openRouterModel = currentConfig.openRouterModel
-                val resendKey = currentConfig.resendApiKey
+                val brevoKey = currentConfig.brevoApiKey
 
                 // Derive search query tailored to this task
                 val query = deriveQueryForTask(task, currentConfig.searchQuery)
@@ -438,24 +462,21 @@ class DashboardViewModel(
                             newLog = "AI deliverable generated via $providerUsed (${aiContent.length} chars). Finalized and saved."
                         )
 
-                        // 3. Resend Email Dispatch on Task Completion
-                        val targetEmail = task.clientEmail.trim().ifBlank {
-                            // Extract email from discovered search leads snippet/title if present
-                            val emailRegex = Regex("[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}")
-                            searchResult.leads.mapNotNull {
-                                emailRegex.find(it.snippet)?.value ?: emailRegex.find(it.title)?.value
-                            }.firstOrNull().orEmpty()
-                        }
+                        // 3. Brevo dispatch only targets validated business email addresses.
+                        val targetEmail = task.clientEmail.trim().takeIf(BusinessEmailValidator::isValid)
+                            ?: searchResult.leads.firstNotNullOfOrNull {
+                                BusinessEmailValidator.findIn("${it.snippet}\n${it.title}")
+                            }.orEmpty()
 
-                        if (resendKey.isNotBlank()) {
+                        if (brevoKey.isNotBlank()) {
                             if (targetEmail.isNotBlank()) {
                                 repository.updateTaskStatus(
                                     taskId = task.id,
                                     newStatus = "COMPLETED",
-                                    newLog = "Dispatching proposal email via Resend to $targetEmail..."
+                                    newLog = "Dispatching proposal email via Brevo to $targetEmail..."
                                 )
                                 val emailRes = emailService.sendEmail(
-                                    apiKey = resendKey,
+                                    apiKey = brevoKey,
                                     toEmail = targetEmail,
                                     subject = "SEO Audit & Growth Proposal: ${task.title}",
                                     bodyText = aiContent
@@ -465,14 +486,14 @@ class DashboardViewModel(
                                     repository.updateTaskStatus(
                                         taskId = task.id,
                                         newStatus = "COMPLETED",
-                                        newLog = "Email sent successfully via Resend"
+                                        newLog = "Email sent successfully via Brevo"
                                     )
                                 } else {
                                     val err = emailRes.exceptionOrNull()?.message ?: "Unknown delivery error"
                                     repository.updateTaskStatus(
                                         taskId = task.id,
                                         newStatus = "COMPLETED",
-                                        newLog = "Resend auto-dispatch error: $err"
+                                        newLog = "Brevo auto-dispatch error: $err"
                                     )
                                 }
                             } else {
@@ -493,7 +514,7 @@ class DashboardViewModel(
                                 repository.updateTaskStatus(
                                     taskId = task.id,
                                     newStatus = "COMPLETED",
-                                    newLog = "Proposal ready. Add a Resend API Key in Settings to enable automated email dispatch."
+                                    newLog = "Proposal ready. Add a Brevo API Key in Settings to enable automated email dispatch."
                                 )
                             }
                         }
@@ -532,7 +553,7 @@ class DashboardViewModel(
     }
 
     /**
-     * Manually dispatches the task's proposal to the specified recipient via Resend API.
+    * Manually dispatches the task's proposal to the specified recipient via Brevo.
      */
     fun sendTaskEmail(
         task: Task,
@@ -542,10 +563,10 @@ class DashboardViewModel(
     ) {
         viewModelScope.launch {
             val currentConfig = settingsRepository.settingsFlow.value
-            val resendKey = currentConfig.resendApiKey
+            val brevoKey = currentConfig.brevoApiKey
 
-            if (resendKey.isBlank()) {
-                onResult(false, "Please configure your Resend API Key in Settings first.")
+            if (brevoKey.isBlank()) {
+                onResult(false, "Please configure your Brevo API key in Settings first.")
                 return@launch
             }
 
@@ -569,7 +590,7 @@ class DashboardViewModel(
             repository.updateTaskStatus(
                 taskId = task.id,
                 newStatus = task.status,
-                newLog = "Manually sending proposal email via Resend to $target..."
+                newLog = "Manually sending proposal email via Brevo to $target..."
             )
 
             val attachments = if (voiceNote != null) {
@@ -579,7 +600,7 @@ class DashboardViewModel(
             }
 
             val result = emailService.sendEmail(
-                apiKey = resendKey,
+                apiKey = brevoKey,
                 toEmail = target,
                 subject = "SEO Audit & Growth Proposal: ${task.title}",
                 bodyText = contentToSend,
@@ -591,28 +612,28 @@ class DashboardViewModel(
                 repository.updateTaskStatus(
                     taskId = task.id,
                     newStatus = task.status,
-                    newLog = "Email sent successfully via Resend"
+                    newLog = "Email sent successfully via Brevo"
                 )
-                onResult(true, "Email sent successfully via Resend (ID: ${sent.emailId.take(8)}...)")
+                onResult(true, "Email sent successfully via Brevo (ID: ${sent.emailId.take(8)}...)")
             } else {
                 val err = result.exceptionOrNull()?.message ?: "Failed to deliver email"
                 repository.updateTaskStatus(
                     taskId = task.id,
                     newStatus = task.status,
-                    newLog = "Resend delivery failed: $err"
+                    newLog = "Brevo delivery failed: $err"
                 )
                 onResult(false, "Failed to send email: $err")
             }
         }
     }
 
-    fun testResendKey(key: String, testEmail: String? = null, onResult: (Boolean, String) -> Unit) {
+    fun testBrevoKey(key: String, onResult: (Boolean, String) -> Unit) {
         viewModelScope.launch {
-            val result = emailService.testConnection(key, testEmail)
+            val result = emailService.testConnection(key)
             if (result.isSuccess) {
                 onResult(true, result.getOrThrow())
             } else {
-                onResult(false, result.exceptionOrNull()?.message ?: "Resend connection error")
+                onResult(false, result.exceptionOrNull()?.message ?: "Brevo connection error")
             }
         }
     }
@@ -784,11 +805,15 @@ class DashboardViewModel(
                 tavilyKey = currentConfig.tavilyApiKey
             )
 
-            val prospects = searchResult.leads
+            val qualifiedProspects = searchResult.leads.mapNotNull { prospect ->
+                BusinessEmailValidator.findIn("${prospect.snippet}\n${prospect.title}")
+                    ?.let { prospect to it }
+            }
+            val prospects = qualifiedProspects.map { it.first }
             if (prospects.isEmpty()) {
                 _discoveryProgress.value = LeadDiscoveryProgress(
                     isRunning = false,
-                    stepMessage = "No prospects found for this query.",
+                    stepMessage = "No prospects with valid business email addresses were found.",
                     prospects = emptyList()
                 )
                 return@launch
@@ -801,9 +826,10 @@ class DashboardViewModel(
             )
 
             val generatedPitches = mutableListOf<GeneratedPitch>()
-            val targetProspects = prospects.take(3)
+            val targetProspects = qualifiedProspects.take(3)
 
-            for ((index, prospect) in targetProspects.withIndex()) {
+            for ((index, qualifiedProspect) in targetProspects.withIndex()) {
+                val (prospect, discoveredEmail) = qualifiedProspect
                 _discoveryProgress.value = _discoveryProgress.value.copy(
                     stepMessage = "Formulating proposal ${index + 1}/${targetProspects.size} for ${prospect.sourcePlatform}..."
                 )
@@ -845,12 +871,6 @@ class DashboardViewModel(
                 )
 
                 generatedPitches.add(pitch)
-
-                // Check if lead snippet/link has an email
-                val emailRegex = Regex("[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}")
-                val discoveredEmail = emailRegex.find(prospect.snippet)?.value
-                    ?: emailRegex.find(prospect.title)?.value
-                    ?: ""
 
                 // Add real discovered task to repository
                 val task = Task(
@@ -1003,9 +1023,9 @@ class DashboardViewModel(
         onResult: (Boolean, String) -> Unit
     ) {
         viewModelScope.launch {
-            val resendKey = settings.value.resendApiKey
-            if (resendKey.isBlank()) {
-                onResult(false, "Please configure your Resend API Key in Settings first.")
+            val brevoKey = settings.value.brevoApiKey
+            if (brevoKey.isBlank()) {
+                onResult(false, "Please configure your Brevo API key in Settings first.")
                 return@launch
             }
             if (toEmail.isBlank()) {
@@ -1013,16 +1033,16 @@ class DashboardViewModel(
                 return@launch
             }
             val res = emailService.sendEmail(
-                apiKey = resendKey,
+                apiKey = brevoKey,
                 toEmail = toEmail,
                 subject = subject,
                 bodyText = bodyText
             )
             if (res.isSuccess) {
-                onResult(true, "Email sent successfully via Resend")
+                onResult(true, "Email sent successfully via Brevo")
             } else {
                 val err = res.exceptionOrNull()?.message ?: "Failed to deliver email"
-                onResult(false, "Resend delivery error: $err")
+                onResult(false, "Brevo delivery error: $err")
             }
         }
     }
@@ -1092,9 +1112,9 @@ class DashboardViewModel(
         onResult: (Boolean, String) -> Unit
     ) {
         viewModelScope.launch {
-            val resendKey = settings.value.resendApiKey
-            if (resendKey.isBlank()) {
-                onResult(false, "Please configure your Resend API Key in Settings first.")
+            val brevoKey = settings.value.brevoApiKey
+            if (brevoKey.isBlank()) {
+                onResult(false, "Please configure your Brevo API key in Settings first.")
                 return@launch
             }
             if (toEmail.isBlank()) {
@@ -1109,17 +1129,17 @@ class DashboardViewModel(
             }
 
             val res = emailService.sendEmail(
-                apiKey = resendKey,
+                apiKey = brevoKey,
                 toEmail = toEmail,
                 subject = subject,
                 bodyText = bodyText,
                 attachments = attachments
             )
             if (res.isSuccess) {
-                onResult(true, "Email sent successfully via Resend" + if (voiceNote != null) " with AI Voice Note" else "")
+                onResult(true, "Email sent successfully via Brevo" + if (voiceNote != null) " with AI Voice Note" else "")
             } else {
                 val err = res.exceptionOrNull()?.message ?: "Failed to deliver email"
-                onResult(false, "Resend delivery error: $err")
+                onResult(false, "Brevo delivery error: $err")
             }
         }
     }
@@ -1176,9 +1196,9 @@ class DashboardViewModel(
         onResult: (Boolean, String) -> Unit
     ) {
         viewModelScope.launch {
-            val resendKey = settings.value.resendApiKey
-            if (resendKey.isBlank()) {
-                onResult(false, "Please configure your Resend API Key in Settings first.")
+            val brevoKey = settings.value.brevoApiKey
+            if (brevoKey.isBlank()) {
+                onResult(false, "Please configure your Brevo API key in Settings first.")
                 return@launch
             }
             if (email.senderEmail.isBlank()) {
@@ -1193,7 +1213,7 @@ class DashboardViewModel(
             }
 
             val res = emailService.sendEmail(
-                apiKey = resendKey,
+                apiKey = brevoKey,
                 toEmail = email.senderEmail,
                 subject = "Re: ${email.subject}",
                 bodyText = email.draftedReply,
@@ -1202,10 +1222,10 @@ class DashboardViewModel(
 
             if (res.isSuccess) {
                 inboxRepository?.markApprovedAndSent(email.id)
-                onResult(true, "Email sent successfully via Resend")
+                onResult(true, "Email sent successfully via Brevo")
             } else {
                 val err = res.exceptionOrNull()?.message ?: "Delivery failed"
-                onResult(false, "Resend delivery error: $err")
+                onResult(false, "Brevo delivery error: $err")
             }
         }
     }

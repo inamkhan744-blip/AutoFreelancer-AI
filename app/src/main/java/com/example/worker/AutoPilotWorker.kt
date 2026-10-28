@@ -17,8 +17,9 @@ import com.example.data.repository.ClientRepository
 import com.example.data.repository.SettingsRepository
 import com.example.data.repository.TaskRepository
 import com.example.data.service.AiOrchestrationService
-import com.example.data.service.ResendEmailService
+import com.example.data.service.BrevoEmailService
 import com.example.data.service.SearchProspectService
+import com.example.util.BusinessEmailValidator
 import kotlinx.coroutines.flow.first
 import java.util.concurrent.TimeUnit
 
@@ -33,6 +34,8 @@ class AutoPilotWorker(
         Log.i(tag, "Auto-Pilot worker triggered in background")
         val context = applicationContext
         val settingsRepo = SettingsRepository(context)
+        runCatching { settingsRepo.loadCloudSettings() }
+            .onFailure { Log.e(tag, "Failed to load cloud settings: ${it.message}", it) }
         val settings = settingsRepo.settingsFlow.value
 
         if (!settings.autoPilotEnabled) {
@@ -44,7 +47,7 @@ class AutoPilotWorker(
         val clientRepo = ClientRepository(context)
         val aiService = AiOrchestrationService()
         val searchService = SearchProspectService()
-        val emailService = ResendEmailService()
+        val emailService = BrevoEmailService()
 
         try {
             // 1. Process all currently PENDING tasks automatically
@@ -75,8 +78,16 @@ class AutoPilotWorker(
                     tavilyKey = settings.tavilyApiKey
                 )
 
-                val leads = searchResult.leads.take(2)
-                for (prospect in leads) {
+                val leads = searchResult.leads.mapNotNull { prospect ->
+                    BusinessEmailValidator.findIn("${prospect.snippet}\n${prospect.title}")
+                        ?.let { prospect to it }
+                        ?: run {
+                            Log.i(tag, "Skipping lead without a valid business email: ${prospect.title}")
+                            null
+                        }
+                }.take(2)
+                for ((prospect, discoveredEmail) in leads) {
+
                     val prompt = "Write a high-converting, personalized client pitch for this lead looking for an SEO audit:\nTitle: ${prospect.title}\nContext: ${prospect.snippet}\nLink: ${prospect.link}"
                     val systemPrompt = "You are Apollo-Scout, an elite autonomous freelance SEO scout. Formulate a personalized outreach message with clear findings."
 
@@ -99,11 +110,6 @@ class AutoPilotWorker(
                     if (settings.paymentLinkUrl.isNotBlank()) {
                         pitchBody += "\n\nTo get the full SEO audit report, please complete the payment here: ${settings.paymentLinkUrl.trim()}"
                     }
-
-                    val emailRegex = Regex("[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}")
-                    val discoveredEmail = emailRegex.find(prospect.snippet)?.value
-                        ?: emailRegex.find(prospect.title)?.value
-                        ?: ""
 
                     val autoTask = Task(
                         title = "Auto-Pilot: Outreach to ${prospect.title.take(35)}",
@@ -128,11 +134,11 @@ class AutoPilotWorker(
 
                     taskRepo.createTask(autoTask)
 
-                    // Feature 1: Actual Email Sending via Resend with exact required logs
-                    if (settings.isResendConfigured) {
+                    // Send outreach only when Brevo is configured.
+                    if (settings.isBrevoConfigured) {
                         if (discoveredEmail.isNotBlank()) {
                             val sendRes = emailService.sendEmail(
-                                apiKey = settings.resendApiKey,
+                                apiKey = settings.brevoApiKey,
                                 toEmail = discoveredEmail,
                                 subject = "SEO Audit & Growth Proposal: ${autoTask.title}",
                                 bodyText = pitchBody
@@ -141,14 +147,14 @@ class AutoPilotWorker(
                                 taskRepo.updateTaskStatus(
                                     taskId = autoTask.id,
                                     newStatus = "COMPLETED",
-                                    newLog = "Email sent successfully via Resend"
+                                    newLog = "Email sent successfully via Brevo"
                                 )
                             } else {
                                 val err = sendRes.exceptionOrNull()?.message ?: "Unknown delivery error"
                                 taskRepo.updateTaskStatus(
                                     taskId = autoTask.id,
                                     newStatus = "COMPLETED",
-                                    newLog = "Resend delivery error: $err"
+                                    newLog = "Brevo delivery error: $err"
                                 )
                             }
                         } else {
@@ -189,7 +195,7 @@ class AutoPilotWorker(
         clientRepo: ClientRepository,
         aiService: AiOrchestrationService,
         searchService: SearchProspectService,
-        emailService: ResendEmailService
+        emailService: BrevoEmailService
     ) {
         val settings = settingsRepo.settingsFlow.value
         taskRepo.updateTaskStatus(
@@ -246,17 +252,15 @@ class AutoPilotWorker(
         )
 
         // 3. Auto-dispatch email if target email present
-        val targetEmail = task.clientEmail.trim().ifBlank {
-            val emailRegex = Regex("[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}")
-            searchResult.leads.mapNotNull { item ->
-                emailRegex.find(item.snippet)?.value ?: emailRegex.find(item.title)?.value
-            }.firstOrNull().orEmpty()
-        }
+        val targetEmail = task.clientEmail.trim().takeIf(BusinessEmailValidator::isValid)
+            ?: searchResult.leads.firstNotNullOfOrNull { item ->
+                BusinessEmailValidator.findIn("${item.snippet}\n${item.title}")
+            }.orEmpty()
 
-        if (settings.isResendConfigured) {
+        if (settings.isBrevoConfigured) {
             if (targetEmail.isNotBlank()) {
                 val emailRes = emailService.sendEmail(
-                    apiKey = settings.resendApiKey,
+                    apiKey = settings.brevoApiKey,
                     toEmail = targetEmail,
                     subject = "SEO Audit & Growth Proposal: ${task.title}",
                     bodyText = deliverableContent
@@ -266,14 +270,14 @@ class AutoPilotWorker(
                     taskRepo.updateTaskStatus(
                         taskId = task.id,
                         newStatus = "COMPLETED",
-                        newLog = "Email sent successfully via Resend"
+                        newLog = "Email sent successfully via Brevo"
                     )
                 } else {
                     val err = emailRes.exceptionOrNull()?.message ?: "Unknown delivery error"
                     taskRepo.updateTaskStatus(
                         taskId = task.id,
                         newStatus = "COMPLETED",
-                        newLog = "Resend delivery error: $err"
+                        newLog = "Brevo delivery error: $err"
                     )
                 }
             } else {

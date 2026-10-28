@@ -581,7 +581,7 @@ fun DashboardScreen(
 
                                 Spacer(modifier = Modifier.height(16.dp))
 
-                                // Resend Email Dispatch Section
+                                // Brevo Email Dispatch Section
                                 Card(
                                     modifier = Modifier.fillMaxWidth(),
                                     shape = RoundedCornerShape(10.dp),
@@ -593,7 +593,7 @@ fun DashboardScreen(
                                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                                         ) {
                                             Icon(Icons.Default.Email, contentDescription = null, tint = CyberTertiary, modifier = Modifier.size(16.dp))
-                                            Text("Send Proposal via Email (Resend)", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold))
+                                            Text("Send Proposal via Email (Brevo)", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold))
                                         }
 
                                         Spacer(modifier = Modifier.height(8.dp))
@@ -1505,7 +1505,7 @@ fun TaskDetailPane(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Resend Email Dispatch Section
+            // Brevo Email Dispatch Section
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
@@ -1524,7 +1524,7 @@ fun TaskDetailPane(
                     ) {
                         Icon(Icons.Default.Email, contentDescription = null, tint = CyberTertiary, modifier = Modifier.size(18.dp))
                         Text(
-                            text = "Client Proposal Email (Resend API)",
+                             text = "Client Proposal Email (Brevo API)",
                             style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
                         )
                     }
@@ -1535,7 +1535,7 @@ fun TaskDetailPane(
                         value = recipientEmail,
                         onValueChange = { recipientEmail = it },
                         label = { Text("Recipient Email") },
-                        placeholder = { Text("client@example.com (or delivered@resend.dev)") },
+                         placeholder = { Text("client@company.com") },
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("recipient_email_input"),

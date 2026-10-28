@@ -111,3 +111,32 @@ test("Authenticated user: cannot update another user's task", async () => {
     })
   );
 });
+
+test("Authenticated user: can store API keys in their own settings document", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).collection("settings").doc("api_keys").set({
+      gemini_api_key: "gemini-test",
+      openrouter_api_key: "openrouter-test",
+      serper_api_key: "serper-test",
+      tavily_api_key: "tavily-test",
+      elevenlabs_api_key: "elevenlabs-test",
+      brevo_api_key: "brevo-test",
+      payment_link_url: "https://example.test/pay",
+    })
+  );
+});
+
+test("Authenticated user: cannot read or write another user's API keys", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const bobKeys = aliceDb.collection("users").doc(BOB_UID).collection("settings").doc("api_keys");
+  await assertFails(bobKeys.get());
+  await assertFails(bobKeys.set({ gemini_api_key: "stolen" }));
+});
+
+test("Unauthenticated user: cannot access API keys", async () => {
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+  await assertFails(
+    unauthDb.collection("users").doc(ALICE_UID).collection("settings").doc("api_keys").get()
+  );
+});

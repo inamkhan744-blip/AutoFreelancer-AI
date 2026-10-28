@@ -491,11 +491,11 @@ fun ClientsCrmScreen(
         )
     }
 
-    // Dialog: Send Email to Client via Resend
+    // Dialog: Send Email to Client via Brevo
     selectedClientForEmail?.let { client ->
         AlertDialog(
             onDismissRequest = { selectedClientForEmail = null },
-            title = { Text("Send Email via Resend") },
+            title = { Text("Send Email via Brevo") },
             text = {
                 Column(
                     modifier = Modifier
@@ -562,7 +562,7 @@ fun ClientsCrmScreen(
                     } else {
                         Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Send via Resend")
+                         Text("Send via Brevo")
                     }
                 }
             },

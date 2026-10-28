@@ -477,11 +477,11 @@ fun ClientDeliverablesScreen(
         }
     }
 
-    // Modal: Send Deliverable Email via Resend
+    // Modal: Send Deliverable Email via Brevo
     if (emailDialogOpen) {
         AlertDialog(
             onDismissRequest = { emailDialogOpen = false },
-            title = { Text("Email Deliverable via Resend") },
+            title = { Text("Email Deliverable via Brevo") },
             text = {
                 Column(
                     modifier = Modifier
@@ -549,7 +549,7 @@ fun ClientDeliverablesScreen(
                     } else {
                         Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Send via Resend")
+                         Text("Send via Brevo")
                     }
                 }
             },

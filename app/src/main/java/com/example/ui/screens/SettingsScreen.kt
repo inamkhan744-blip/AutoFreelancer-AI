@@ -117,12 +117,12 @@ fun SettingsScreen(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
-    // Form inputs initialized from EncryptedSharedPreferences
+    // Form inputs initialized from the current cloud settings state
     var geminiApiKey by remember(currentSettings) { mutableStateOf(currentSettings.geminiApiKey) }
     var openRouterApiKey by remember(currentSettings) { mutableStateOf(currentSettings.openRouterApiKey) }
     var geminiModel by remember(currentSettings) { mutableStateOf(currentSettings.geminiModel) }
     var openRouterModel by remember(currentSettings) { mutableStateOf(currentSettings.openRouterModel) }
-    var resendApiKey by remember(currentSettings) { mutableStateOf(currentSettings.resendApiKey) }
+    var brevoApiKey by remember(currentSettings) { mutableStateOf(currentSettings.brevoApiKey) }
     var serperApiKey by remember(currentSettings) { mutableStateOf(currentSettings.serperApiKey) }
     var tavilyApiKey by remember(currentSettings) { mutableStateOf(currentSettings.tavilyApiKey) }
     var paymentLinkUrl by remember(currentSettings) { mutableStateOf(currentSettings.paymentLinkUrl) }
@@ -140,7 +140,7 @@ fun SettingsScreen(
     // Password visibility toggles
     var showGeminiKey by remember { mutableStateOf(false) }
     var showOpenRouterKey by remember { mutableStateOf(false) }
-    var showResendKey by remember { mutableStateOf(false) }
+    var showBrevoKey by remember { mutableStateOf(false) }
     var showSerperKey by remember { mutableStateOf(false) }
     var showTavilyKey by remember { mutableStateOf(false) }
     var showElevenLabsKey by remember { mutableStateOf(false) }
@@ -152,8 +152,8 @@ fun SettingsScreen(
     var openRouterTesting by remember { mutableStateOf(false) }
     var openRouterTestResult by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
 
-    var resendTesting by remember { mutableStateOf(false) }
-    var resendTestResult by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
+    var brevoTesting by remember { mutableStateOf(false) }
+    var brevoTestResult by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
 
     var serperTesting by remember { mutableStateOf(false) }
     var serperTestResult by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
@@ -223,12 +223,12 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.width(12.dp))
                     Column {
                         Text(
-                            text = "Encrypted On-Device Storage",
+                            text = "Firebase Cloud Storage",
                             style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = "All API keys (Gemini, OpenRouter, Resend, Serper, Tavily) are encrypted using EncryptedSharedPreferences (AES-256 GCM) with Android KeyStore.",
+                            text = "API keys are stored in your signed-in Firebase account and are accessible only to that account.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -262,8 +262,8 @@ fun SettingsScreen(
                     modifier = Modifier.weight(1f)
                 )
                 StatusPill(
-                    label = "Resend Email",
-                    isConfigured = resendApiKey.isNotBlank(),
+                    label = "Brevo Email",
+                    isConfigured = brevoApiKey.isNotBlank(),
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -962,7 +962,7 @@ fun SettingsScreen(
             }
 
             // ==========================================
-            // 3. Resend API Key (Email Dispatch)
+            // 3. Brevo API Key (Email Dispatch)
             // ==========================================
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -994,7 +994,7 @@ fun SettingsScreen(
                         Column {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
-                                    text = "3. Resend API Key",
+                                    text = "3. Brevo API Key",
                                     style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
@@ -1006,7 +1006,7 @@ fun SettingsScreen(
                                 )
                             }
                             Text(
-                                text = "Free email delivery API (resend.com)",
+                                text = "Email delivery API (brevo.com)",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -1020,30 +1020,36 @@ fun SettingsScreen(
                     )
 
                     OutlinedTextField(
-                        value = resendApiKey,
+                        value = brevoApiKey,
                         onValueChange = {
-                            resendApiKey = it
-                            resendTestResult = null
+                            brevoApiKey = it
+                            brevoTestResult = null
                         },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .testTag("resend_api_key_input"),
-                        label = { Text("Resend API Key") },
-                        placeholder = { Text("re_...") },
-                        visualTransformation = if (showResendKey) VisualTransformation.None else PasswordVisualTransformation(),
+                            .testTag("brevo_api_key_input"),
+                        label = { Text("Brevo API Key") },
+                        placeholder = { Text("xkeysib-...") },
+                        visualTransformation = if (showBrevoKey) VisualTransformation.None else PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                         trailingIcon = {
-                            IconButton(onClick = { showResendKey = !showResendKey }) {
+                            IconButton(onClick = { showBrevoKey = !showBrevoKey }) {
                                 Icon(
-                                    imageVector = if (showResendKey) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                                    contentDescription = "Toggle Resend key visibility"
+                                    imageVector = if (showBrevoKey) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                    contentDescription = "Toggle Brevo key visibility"
                                 )
                             }
                         },
                         singleLine = true
                     )
 
-                    // Test Resend Connection Button & Feedback
+                    Text(
+                        text = "Verified sender: inamkhan744@gmail.com",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    // Test Brevo Connection Button & Feedback
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -1051,33 +1057,33 @@ fun SettingsScreen(
                     ) {
                         OutlinedButton(
                             onClick = {
-                                if (resendApiKey.isBlank()) {
-                                    resendTestResult = Pair(false, "Please enter a Resend API key first")
+                                if (brevoApiKey.isBlank()) {
+                                    brevoTestResult = Pair(false, "Please enter a Brevo API key first")
                                     return@OutlinedButton
                                 }
-                                resendTesting = true
-                                resendTestResult = null
-                                viewModel.testResendKey(resendApiKey) { success, msg ->
-                                    resendTesting = false
-                                    resendTestResult = Pair(success, msg)
+                                brevoTesting = true
+                                brevoTestResult = null
+                                viewModel.testBrevoKey(brevoApiKey) { success, msg ->
+                                    brevoTesting = false
+                                    brevoTestResult = Pair(success, msg)
                                 }
                             },
-                            enabled = !resendTesting && resendApiKey.isNotBlank(),
+                            enabled = !brevoTesting && brevoApiKey.isNotBlank(),
                             shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.testTag("test_resend_button")
+                            modifier = Modifier.testTag("test_brevo_button")
                         ) {
-                            if (resendTesting) {
+                            if (brevoTesting) {
                                 CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text("Testing...", fontSize = 12.sp)
                             } else {
                                 Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(14.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Test Resend Connection", fontSize = 12.sp)
+                                Text("Test Brevo Connection", fontSize = 12.sp)
                             }
                         }
 
-                        resendTestResult?.let { (success, msg) ->
+                        brevoTestResult?.let { (success, msg) ->
                             InlineStatusBadge(success = success, message = msg)
                         }
                     }
@@ -1553,7 +1559,7 @@ fun SettingsScreen(
                         openRouterApiKey = openRouterApiKey.trim(),
                         geminiModel = geminiModel.trim(),
                         openRouterModel = openRouterModel.trim(),
-                        resendApiKey = resendApiKey.trim(),
+                        brevoApiKey = brevoApiKey.trim(),
                         serperApiKey = serperApiKey.trim(),
                         tavilyApiKey = tavilyApiKey.trim(),
                         paymentLinkUrl = paymentLinkUrl.trim(),
@@ -1564,9 +1570,10 @@ fun SettingsScreen(
                         elevenLabsVoiceId = elevenLabsVoiceId.trim(),
                         inboundEmailWebhookUrl = inboundEmailWebhookUrl.trim()
                     )
-                    viewModel.saveSettings(updated, context)
-                    scope.launch {
-                        snackbarHostState.showSnackbar("All API keys, ElevenLabs Voice, and Webhook settings saved securely!")
+                    viewModel.saveSettings(updated, context) { success, message ->
+                        scope.launch {
+                            snackbarHostState.showSnackbar(message)
+                        }
                     }
                 },
                 modifier = Modifier
