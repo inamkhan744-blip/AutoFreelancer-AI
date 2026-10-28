@@ -64,6 +64,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
         try {
             com.example.util.configureAppCheck(this, intent)
             enableEdgeToEdge()
@@ -83,32 +84,18 @@ class MainActivity : ComponentActivity() {
             showStartupError(error)
         }
 
-        try {
-            setContent {
-                AutoFreelancerTheme {
-                    try {
-                        val error = startupError ?: AppStartupState.errorMessage
-                        if (error != null) {
-                            StartupErrorScreen(error)
-                        } else if (isAuthenticated) {
-                            AppRootContent()
-                        } else {
-                            AuthScreen(onAuthSuccess = { isAuthenticated = true })
-                        }
-                    } catch (error: Exception) {
-                        StartupErrorScreen(error.localizedMessage ?: "App initialization failed.")
-                    }
+        // Naya saaf setContent block (bina try-catch ke, kyunki Compose mein ye allowed nahi hai)
+        setContent {
+            AutoFreelancerTheme {
+                val error = startupError ?: AppStartupState.errorMessage
+                if (error != null) {
+                    StartupErrorScreen(error)
+                } else if (isAuthenticated) {
+                    AppRootContent()
+                } else {
+                    AuthScreen(onAuthSuccess = { isAuthenticated = true })
                 }
             }
-        } catch (error: Exception) {
-            showStartupError(error)
-            runCatching {
-                setContent {
-                    AutoFreelancerTheme {
-                        StartupErrorScreen(startupError ?: "App initialization failed.")
-                    }
-                }
-            }.onFailure { Log.e("MainActivity", "Unable to render startup error", it) }
         }
     }
 
@@ -335,4 +322,3 @@ fun AppRootContent() {
         }
     }
 }
-
