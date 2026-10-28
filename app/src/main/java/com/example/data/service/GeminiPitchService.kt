@@ -1,6 +1,7 @@
 package com.example.data.service
 
 import android.util.Log
+import com.example.data.model.OutreachTone
 import com.example.data.model.ProspectResult
 import com.google.firebase.Firebase
 import com.google.firebase.ai.ai
@@ -18,7 +19,8 @@ data class GeneratedPitch(
     val personalizedPitchMessage: String,
     val auditHooks: List<String>,
     val suggestedRateOrValue: Double,
-    val recommendedCta: String
+    val recommendedCta: String,
+    val outreachTone: OutreachTone = OutreachTone.PROFESSIONAL
 )
 
 class GeminiPitchService {
@@ -54,7 +56,9 @@ class GeminiPitchService {
     suspend fun generatePersonalizedPitch(
         prospect: ProspectResult,
         freelancerSpecialty: String = "Technical SEO & Conversion Rate Optimization",
-        customInstructions: String = ""
+        customInstructions: String = "",
+        outreachTone: OutreachTone = OutreachTone.PROFESSIONAL,
+        dynamicPrice: Int = DynamicPricingEngine.SMALL_BUSINESS_PRICE
     ): Result<GeneratedPitch> = withContext(Dispatchers.IO) {
         val prompt = """
             You are 'Apollo-Scout', an expert autonomous AI freelance business development agent for an elite SEO & Web Growth Agency.
@@ -66,6 +70,10 @@ class GeminiPitchService {
             - Link: ${prospect.link}
             - Agency Specialty: $freelancerSpecialty
             ${if (customInstructions.isNotBlank()) "- Director Custom Directives: $customInstructions" else ""}
+
+            ${CompetitorSpyPrompt.instructionsFor(prospect)}
+            Write in a ${outreachTone.promptLabel.lowercase()} tone, chosen from historical email reply-rate data.
+            Quote exactly $$dynamicPrice for the audit. Do not invent a different price.
             
             Write a deeply personalized, high-converting pitch message for this prospect.
             Guidelines:
@@ -73,7 +81,7 @@ class GeminiPitchService {
             2. Reference their exact situation (e.g. core update traffic drops, migrations, Shopify redirects, or indexation).
             3. Provide 2-3 value-first insights without charging anything upfront.
             4. Propose a zero-friction CTA: e.g. "I can record a quick 4-minute video walking through what I found, no strings attached."
-            5. Suggest an estimated project scope value between $800 and $4,000 depending on complexity.
+            5. Use the fixed audit quote above consistently in the message and CTA.
         """.trimIndent()
 
         try {
@@ -90,7 +98,7 @@ class GeminiPitchService {
             val pitch = json.optString("personalizedPitchMessage", "").trim()
                 .takeIf { it.isNotBlank() && !it.equals("null", ignoreCase = true) }
                 ?: throw IllegalStateException("Gemini returned an empty pitch.")
-            val suggestedValue = json.optDouble("suggestedRateOrValue", 1800.0)
+            val suggestedValue = dynamicPrice.toDouble()
             val cta = json.optString("recommendedCta", "Send a complimentary 4-minute audit video")
 
             val hooksArray = json.optJSONArray("auditHooks")
@@ -108,7 +116,8 @@ class GeminiPitchService {
                     personalizedPitchMessage = pitch,
                     auditHooks = hooks,
                     suggestedRateOrValue = suggestedValue,
-                    recommendedCta = cta
+                    recommendedCta = cta,
+                    outreachTone = outreachTone
                 )
             )
         } catch (e: CancellationException) {

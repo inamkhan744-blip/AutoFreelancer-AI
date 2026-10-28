@@ -410,7 +410,7 @@ fun SettingsScreen(
                     }
 
                     Text(
-                        text = "Whenever the AI generates a proposal or deliverable for a client, it will automatically append a Call-to-Action with this payment link at the end: 'To get the full SEO audit report, please complete the payment here: [Insert Payment Link]'. If left empty, nothing is appended.",
+                        text = "The AI selects a $50 starter quote or a $350 corporate quote. Use {amount} in a checkout URL template, or ensure your payment provider honors the amount query parameter added to this link.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -437,7 +437,7 @@ fun SettingsScreen(
                             Icon(Icons.Default.CheckCircle, contentDescription = null, tint = CyberSuccess, modifier = Modifier.size(14.dp))
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "CTA will append: 'To get the full SEO audit report, please complete the payment here: ${paymentLinkUrl.trim()}'",
+                                text = "Checkout amount is selected per lead: $50 starter or $350 corporate.",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = CyberSuccess
                             )

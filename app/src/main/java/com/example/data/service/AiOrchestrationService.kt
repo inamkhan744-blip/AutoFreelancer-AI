@@ -1,6 +1,7 @@
 package com.example.data.service
 
 import android.util.Log
+import com.example.data.model.OutreachTone
 import com.example.data.model.ProspectResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -507,12 +508,17 @@ class AiOrchestrationService(
         workerName: String,
         workerRole: String,
         leads: List<ProspectResult>,
-        paymentLinkUrl: String = ""
+        paymentLinkUrl: String = "",
+        outreachTone: OutreachTone = OutreachTone.PROFESSIONAL,
+        targetWebsite: String = "",
+        dynamicPrice: Int? = null
     ): Result<AiGenerationResult> {
         val systemPrompt = """
             You are $workerName, acting as an elite $workerRole in the AutoFreelancer AI agency.
             You produce real, high-impact deliverables, client outreach proposals, and technical SEO action plans.
-            Always format your response cleanly with clear section headings, actionable recommendations, and professional tone.
+            Always format your response cleanly with clear section headings and actionable recommendations.
+            Use a ${outreachTone.promptLabel.lowercase()} outreach tone based on the strongest observed reply rate.
+            ${dynamicPrice?.let { "Use exactly $$it as the audit price; do not generate a different amount." }.orEmpty()}
         """.trimIndent()
 
         val leadsSummary = if (leads.isNotEmpty()) {
@@ -528,6 +534,13 @@ class AiOrchestrationService(
         } else {
             "Targeting general prospect inquiries and organic SEO search opportunities."
         }
+        val website = targetWebsite.ifBlank {
+            leads.firstOrNull()?.let(CompetitorSpyPrompt::websiteFor).orEmpty()
+        }
+        val competitorInstructions = CompetitorSpyPrompt.instructions(
+            website.ifBlank { "No client website URL was provided; use the business context as a hypothesis." },
+            "Client: $client\nTask: $taskTitle\n${leadsSummary.take(1200)}"
+        )
 
         val userPrompt = """
             TASK: $taskTitle
@@ -536,12 +549,15 @@ class AiOrchestrationService(
             
             DISCOVERED LIVE SEARCH LEADS:
             $leadsSummary
+
+            $competitorInstructions
             
             INSTRUCTIONS:
             1. Craft a personalized, non-spammy outreach message or deliverable tailored directly to the prospect and findings above.
             2. Include 3 specific high-impact audit findings / hypotheses (e.g., Core Web Vitals, indexation bloat, programmatic keyword cannibalization, internal linking).
-            3. Provide an estimated project scope value and a zero-friction Call to Action (e.g. proposing a 4-minute Loom video audit).
-            4. Make it ready to deliver immediately.
+            3. ${dynamicPrice?.let { "Quote exactly $$it for the audit." } ?: "Provide an estimated project scope value."}
+            4. Provide a zero-friction Call to Action (e.g. proposing a 4-minute Loom video audit).
+            5. Make it ready to deliver immediately.
         """.trimIndent()
 
         val genResult = generateContentWithFallback(
@@ -556,7 +572,11 @@ class AiOrchestrationService(
 
         return if (genResult.isSuccess && paymentLinkUrl.isNotBlank()) {
             val gen = genResult.getOrThrow()
-            val cta = "\n\nTo get the full SEO audit report, please complete the payment here: ${paymentLinkUrl.trim()}"
+            val cta = if (dynamicPrice != null) {
+                "\n\nThe ${outreachTone.promptLabel.lowercase()} audit package is $$dynamicPrice. To get the full SEO audit report, complete payment here: ${paymentLinkUrl.trim()}"
+            } else {
+                "\n\nTo get the full SEO audit report, please complete the payment here: ${paymentLinkUrl.trim()}"
+            }
             Result.success(gen.copy(content = gen.content + cta))
         } else {
             genResult
