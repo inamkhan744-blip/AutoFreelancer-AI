@@ -13,6 +13,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -26,9 +28,12 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
+import android.util.Log
 import androidx.compose.material.icons.filled.MarkEmailUnread
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -53,38 +58,104 @@ import com.google.firebase.auth.FirebaseAuth
 
 class MainActivity : ComponentActivity() {
     private var isAuthenticated by mutableStateOf(false)
-    private val authStateListener = FirebaseAuth.AuthStateListener { auth ->
-        isAuthenticated = auth.currentUser != null
-    }
+    private var startupError by mutableStateOf(AppStartupState.errorMessage)
+    private var firebaseAuth: FirebaseAuth? = null
+    private var authStateListener: FirebaseAuth.AuthStateListener? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        com.example.util.configureAppCheck(this, intent)
-        enableEdgeToEdge()
-        isAuthenticated = Firebase.auth.currentUser != null
-        if (isAuthenticated && SettingsRepository(this).settingsFlow.value.autoPilotEnabled) {
-            com.example.worker.AutoPilotScheduler.schedule(this, true)
-        }
-
-        setContent {
-            AutoFreelancerTheme {
-                if (isAuthenticated) {
-                    AppRootContent()
-                } else {
-                    AuthScreen(onAuthSuccess = { isAuthenticated = true })
+        try {
+            com.example.util.configureAppCheck(this, intent)
+            enableEdgeToEdge()
+            firebaseAuth = Firebase.auth
+            isAuthenticated = firebaseAuth?.currentUser != null
+            authStateListener = FirebaseAuth.AuthStateListener { auth ->
+                try {
+                    isAuthenticated = auth.currentUser != null
+                } catch (error: Exception) {
+                    showStartupError(error)
                 }
             }
+            if (isAuthenticated && SettingsRepository(this).settingsFlow.value.autoPilotEnabled) {
+                com.example.worker.AutoPilotScheduler.schedule(this, true)
+            }
+        } catch (error: Exception) {
+            showStartupError(error)
+        }
+
+        try {
+            setContent {
+                AutoFreelancerTheme {
+                    try {
+                        val error = startupError ?: AppStartupState.errorMessage
+                        if (error != null) {
+                            StartupErrorScreen(error)
+                        } else if (isAuthenticated) {
+                            AppRootContent()
+                        } else {
+                            AuthScreen(onAuthSuccess = { isAuthenticated = true })
+                        }
+                    } catch (error: Exception) {
+                        StartupErrorScreen(error.localizedMessage ?: "App initialization failed.")
+                    }
+                }
+            }
+        } catch (error: Exception) {
+            showStartupError(error)
+            runCatching {
+                setContent {
+                    AutoFreelancerTheme {
+                        StartupErrorScreen(startupError ?: "App initialization failed.")
+                    }
+                }
+            }.onFailure { Log.e("MainActivity", "Unable to render startup error", it) }
         }
     }
 
     override fun onStart() {
         super.onStart()
-        Firebase.auth.addAuthStateListener(authStateListener)
+        try {
+            val auth = firebaseAuth ?: return
+            authStateListener?.let(auth::addAuthStateListener)
+        } catch (error: Exception) {
+            showStartupError(error)
+        }
     }
 
     override fun onStop() {
-        Firebase.auth.removeAuthStateListener(authStateListener)
+        try {
+            val auth = firebaseAuth
+            val listener = authStateListener
+            if (auth != null && listener != null) auth.removeAuthStateListener(listener)
+        } catch (error: Exception) {
+            Log.w("MainActivity", "Unable to remove Firebase auth listener", error)
+        }
         super.onStop()
+    }
+
+    private fun showStartupError(error: Throwable) {
+        startupError = error.localizedMessage ?: "App initialization failed."
+        AppStartupState.recordFailure(error)
+    }
+}
+
+@Composable
+private fun StartupErrorScreen(message: String) {
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.background
+    ) {
+        Column(
+            modifier = Modifier.fillMaxSize().padding(24.dp),
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text("App initialization failed", style = MaterialTheme.typography.titleLarge)
+            Text(
+                text = message,
+                modifier = Modifier.padding(top = 8.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }
 
