@@ -122,6 +122,7 @@ import com.example.ui.viewmodel.DashboardMetrics
 import com.example.ui.viewmodel.DashboardViewModel
 import com.example.ui.viewmodel.TasksUiState
 import com.example.ui.viewmodel.WorkerNotification
+import com.example.util.WorkerLogEntry
 import com.google.firebase.Firebase
 import com.google.firebase.auth.auth
 import java.text.NumberFormat
@@ -144,6 +145,7 @@ fun DashboardScreen(
     val statusFilter by viewModel.statusFilter.collectAsState()
     val isOperationLoading by viewModel.isOperationLoading.collectAsState()
     val isAutoPilotActive by viewModel.isAutoPilotActive.collectAsState()
+    val liveTerminalEntries by viewModel.liveTerminalEntries.collectAsState()
 
     val currentUser = runCatching { Firebase.auth.currentUser }.getOrNull()
     val userEmail = currentUser?.email ?: "Freelancer Director"
@@ -406,9 +408,11 @@ fun DashboardScreen(
                     }
                 }
 
+                LiveTerminalPanel(entries = liveTerminalEntries)
+
                 if (isWideScreen) {
                     // Desktop / Tablet Two-Column Layout
-                    Row(modifier = Modifier.fillMaxSize()) {
+                    Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
                         // Left Column: Metrics + Filters + Task Feed
                         Column(
                             modifier = Modifier
@@ -459,7 +463,8 @@ fun DashboardScreen(
                     // Mobile Layout
                     Column(
                         modifier = Modifier
-                            .fillMaxSize()
+                            .weight(1f)
+                            .fillMaxWidth()
                             .padding(horizontal = 16.dp, vertical = 8.dp)
                     ) {
                         MetricsHeader(metrics = metrics)
@@ -470,6 +475,7 @@ fun DashboardScreen(
                             statusFilter = statusFilter,
                             onFilterChanged = { viewModel.onStatusFilterChanged(it) }
                         )
+
                         Spacer(modifier = Modifier.height(12.dp))
                         TaskListContent(
                             tasksState = tasksState,
@@ -711,6 +717,67 @@ fun DashboardScreen(
                 jarvisManager.executeManualCommand(cmd)
             }
         )
+    }
+}
+
+@Composable
+private fun LiveTerminalPanel(entries: List<WorkerLogEntry>) {
+    val scrollState = rememberScrollState()
+    LaunchedEffect(entries.lastOrNull()?.id) {
+        scrollState.animateScrollTo(scrollState.maxValue)
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp)
+            .height(148.dp)
+            .testTag("live_worker_terminal"),
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF050907)),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF00D65A).copy(alpha = 0.6f))
+    ) {
+        Column(modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "LIVE WORKER TERMINAL",
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold
+                    ),
+                    color = Color(0xFF00F56A)
+                )
+                Text(
+                    text = "● LIVE",
+                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
+                    color = Color(0xFF55FF91)
+                )
+            }
+            Spacer(modifier = Modifier.height(5.dp))
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .verticalScroll(scrollState),
+                verticalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                entries.takeLast(8).forEach { entry ->
+                    Text(
+                        text = "> [${entry.worker}] ${entry.message}",
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        ),
+                        color = Color(0xFF9BFFB8),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
     }
 }
 

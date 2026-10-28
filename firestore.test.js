@@ -140,3 +140,29 @@ test("Unauthenticated user: cannot access API keys", async () => {
     unauthDb.collection("users").doc(ALICE_UID).collection("settings").doc("api_keys").get()
   );
 });
+
+test("Authenticated user: can record an email tone outcome in their account", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const event = await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).collection("reply_rate_events").add({
+      recipientHash: "a".repeat(64),
+      tone: "PROFESSIONAL",
+      replied: false,
+      sentAt: new Date(),
+    })
+  );
+  await assertSucceeds(event.update({ replied: true, repliedAt: new Date() }));
+  await assertFails(event.update({ tone: "AGGRESSIVE" }));
+});
+
+test("Authenticated user: cannot write reply-rate events to another user's account", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  await assertFails(
+    aliceDb.collection("users").doc(BOB_UID).collection("reply_rate_events").add({
+      recipientHash: "b".repeat(64),
+      tone: "AGGRESSIVE",
+      replied: false,
+      sentAt: new Date(),
+    })
+  );
+});

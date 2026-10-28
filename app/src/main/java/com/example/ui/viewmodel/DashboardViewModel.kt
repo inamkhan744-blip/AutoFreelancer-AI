@@ -7,7 +7,10 @@ import com.example.data.model.Task
 import com.example.data.repository.AppSettings
 import com.example.data.repository.SettingsRepository
 import com.example.data.repository.TaskRepository
+import com.example.data.repository.ReplyRateRepository
 import com.example.data.service.AiOrchestrationService
+import com.example.data.service.CompetitorSpyPrompt
+import com.example.data.service.DynamicPricingEngine
 import com.example.data.service.GeneratedPitch
 import com.example.data.service.BrevoEmailService
 import com.example.data.service.SearchExecutionResult
@@ -34,6 +37,8 @@ import com.example.util.BusinessEmailValidator
 import com.example.data.service.ElevenLabsVoiceService
 import com.example.data.service.GeneratedVoiceNote
 import com.example.data.service.EmailAttachment
+import com.example.data.model.OutreachTone
+import com.example.util.LiveWorkerLogStore
 import kotlinx.coroutines.flow.first
 
 sealed interface TasksUiState {
@@ -75,8 +80,12 @@ class DashboardViewModel(
     private val emailService: BrevoEmailService = BrevoEmailService(),
     private val seoAuditService: SeoAuditService = SeoAuditService(),
     private val elevenLabsService: ElevenLabsVoiceService = ElevenLabsVoiceService(),
-    private val closerService: AiCloserService = AiCloserService()
+    private val closerService: AiCloserService = AiCloserService(),
+    private val replyRateRepository: ReplyRateRepository = ReplyRateRepository(),
+    private val pricingEngine: DynamicPricingEngine = DynamicPricingEngine(aiService)
 ) : ViewModel() {
+
+    val liveTerminalEntries = LiveWorkerLogStore.entries
 
     private val _currentScreen = MutableStateFlow("DASHBOARD") // "DASHBOARD", "INBOX", "CLIENTS", "DELIVERABLES", "SETTINGS"
     val currentScreen: StateFlow<String> = _currentScreen.asStateFlow()
@@ -389,6 +398,7 @@ class DashboardViewModel(
                     serperKey = serperKey,
                     tavilyKey = tavilyKey
                 )
+                LiveWorkerLogStore.record(task.workerName, "> Search returned ${searchResult.leads.size} candidate leads.")
 
                 repository.updateTaskStatus(
                     taskId = task.id,
@@ -407,10 +417,23 @@ class DashboardViewModel(
 
                 // AI Text Generation via Google Gemini with fallback to OpenRouter
                 if (geminiKey.isNotBlank() || openRouterKey.isNotBlank()) {
+                    val outreachTone = replyRateRepository.bestPerformingTone()
+                    val targetWebsite = searchResult.leads.firstOrNull()?.let(CompetitorSpyPrompt::websiteFor).orEmpty()
+                    val pricing = pricingEngine.decide(
+                        website = targetWebsite,
+                        context = "${task.client}\n${task.title}\n${task.details}",
+                        geminiApiKey = geminiKey,
+                        openRouterApiKey = openRouterKey,
+                        geminiModel = geminiModel,
+                        openRouterModel = openRouterModel
+                    )
+                    val dynamicPaymentLink = pricingEngine.paymentLinkForAmount(currentConfig.paymentLinkUrl, pricing.amount)
+                    LiveWorkerLogStore.record(task.workerName, "> Tone ${outreachTone.promptLabel}; quote $${pricing.amount} (${pricing.segment}).")
+                    LiveWorkerLogStore.record(task.workerName, "> Running competitor comparison for ${targetWebsite.ifBlank { task.client }}...")
                     repository.updateTaskStatus(
                         taskId = task.id,
                         newStatus = "RUNNING",
-                        newLog = "Generating deliverable using AI Engine ($geminiModel / fallback $openRouterModel)..."
+                        newLog = "Generating ${outreachTone.promptLabel.lowercase()} deliverable; selected $${pricing.amount} quote."
                     )
 
                     val aiResult = aiService.generateTaskDeliverable(
@@ -424,7 +447,10 @@ class DashboardViewModel(
                         workerName = task.workerName,
                         workerRole = task.workerRole,
                         leads = searchResult.leads,
-                        paymentLinkUrl = currentConfig.paymentLinkUrl
+                        paymentLinkUrl = dynamicPaymentLink,
+                        outreachTone = outreachTone,
+                        targetWebsite = targetWebsite,
+                        dynamicPrice = pricing.amount
                     )
 
                     if (aiResult.isSuccess) {
@@ -488,6 +514,8 @@ class DashboardViewModel(
                                         newStatus = "COMPLETED",
                                         newLog = "Email sent successfully via Brevo"
                                     )
+                                    replyRateRepository.recordSentPitch(targetEmail, outreachTone)
+                                    LiveWorkerLogStore.record(task.workerName, "> Pitch sent; reply-rate event recorded.")
                                 } else {
                                     val err = emailRes.exceptionOrNull()?.message ?: "Unknown delivery error"
                                     repository.updateTaskStatus(
@@ -528,7 +556,7 @@ class DashboardViewModel(
                             status = "Pitched",
                             leadSource = "AI Worker",
                             pitchMessage = aiContent,
-                            estimatedValue = task.estimatedValue
+                            estimatedValue = pricing.amount.toDouble()
                         )
                         clientRepository?.upsertClient(crmClient)
                     } else {
@@ -609,6 +637,7 @@ class DashboardViewModel(
 
             if (result.isSuccess) {
                 val sent = result.getOrThrow()
+                replyRateRepository.recordSentPitch(target, toneForTask(task))
                 repository.updateTaskStatus(
                     taskId = task.id,
                     newStatus = task.status,
@@ -792,6 +821,7 @@ class DashboardViewModel(
         viewModelScope.launch {
             val currentConfig = settings.value
             val queryToRun = customQuery ?: currentConfig.searchQuery
+            LiveWorkerLogStore.record("Apollo-Scout", "> Searching Reddit, LinkedIn, and web results...")
 
             _discoveryProgress.value = LeadDiscoveryProgress(
                 isRunning = true,
@@ -830,12 +860,26 @@ class DashboardViewModel(
 
             for ((index, qualifiedProspect) in targetProspects.withIndex()) {
                 val (prospect, discoveredEmail) = qualifiedProspect
+                val outreachTone = replyRateRepository.bestPerformingTone()
+                val targetWebsite = CompetitorSpyPrompt.websiteFor(prospect)
+                LiveWorkerLogStore.record("Apollo-Scout", "> Analyzing business scale for a dynamic quote...")
+                val pricing = pricingEngine.decide(
+                    website = targetWebsite,
+                    context = "${prospect.title}\n${prospect.snippet}",
+                    geminiApiKey = currentConfig.geminiApiKey,
+                    openRouterApiKey = currentConfig.openRouterApiKey,
+                    geminiModel = currentConfig.geminiModel,
+                    openRouterModel = currentConfig.openRouterModel
+                )
+                val dynamicPaymentLink = pricingEngine.paymentLinkForAmount(currentConfig.paymentLinkUrl, pricing.amount)
+                LiveWorkerLogStore.record("Apollo-Scout", "> Reply-rate winner: ${outreachTone.promptLabel}; selected $${pricing.amount} ${pricing.segment.lowercase()} tier.")
                 _discoveryProgress.value = _discoveryProgress.value.copy(
                     stepMessage = "Formulating proposal ${index + 1}/${targetProspects.size} for ${prospect.sourcePlatform}..."
                 )
 
-                val prompt = "Write a high-converting, professional, personalized client pitch for this lead looking for an SEO audit:\nTitle: ${prospect.title}\nContext: ${prospect.snippet}\nLink: ${prospect.link}"
-                val systemPrompt = "You are Apollo-Scout, an elite freelance SEO scout. Formulate a personalized outreach message with zero corporate fluff and clear actionable audit findings."
+                val prompt = "Write a persuasive client pitch for this SEO audit lead.\nTitle: ${prospect.title}\nContext: ${prospect.snippet}\nWebsite: ${targetWebsite.ifBlank { "not provided" }}\nSource: ${prospect.link}\n\n${CompetitorSpyPrompt.instructionsFor(prospect)}\n\nQuote exactly $${pricing.amount} using a ${outreachTone.promptLabel.lowercase()} tone."
+                val systemPrompt = "You are Apollo-Scout, an elite freelance SEO scout. Compare the client's site with three plausible direct competitors, use evidence carefully, and write in a ${outreachTone.promptLabel.lowercase()} tone. Never claim live research you did not perform."
+                LiveWorkerLogStore.record("Apollo-Scout", "> Comparing the prospect with three likely competitors...")
 
                 var aiText = "Saw your request for an SEO audit. We can deliver a comprehensive technical analysis."
                 var engineUsed = "Manual Template"
@@ -857,8 +901,8 @@ class DashboardViewModel(
                     }
                 }
 
-                if (currentConfig.paymentLinkUrl.isNotBlank()) {
-                    aiText += "\n\nTo get the full SEO audit report, please complete the payment here: ${currentConfig.paymentLinkUrl.trim()}"
+                if (dynamicPaymentLink.isNotBlank()) {
+                    aiText += "\n\nThe ${outreachTone.promptLabel.lowercase()} audit package is $${pricing.amount}. To get the full SEO audit report, complete payment here: $dynamicPaymentLink"
                 }
 
                 val pitch = GeneratedPitch(
@@ -866,8 +910,9 @@ class DashboardViewModel(
                     subjectLine = "Personalized SEO Audit Proposal for ${prospect.title.take(30)}",
                     personalizedPitchMessage = aiText,
                     auditHooks = listOf("Technical SEO Audit", "Competitive Gap Analysis"),
-                    suggestedRateOrValue = 0.0, // Clean pipeline, no fake dollars
-                    recommendedCta = "Offer a complimentary 4-minute Loom video audit"
+                    suggestedRateOrValue = pricing.amount.toDouble(),
+                    recommendedCta = "Offer a complimentary 4-minute Loom video audit",
+                    outreachTone = outreachTone
                 )
 
                 generatedPitches.add(pitch)
@@ -882,7 +927,7 @@ class DashboardViewModel(
                     priority = "HIGH",
                     client = "${prospect.sourcePlatform} • Lead",
                     clientEmail = discoveredEmail,
-                    estimatedValue = 0.0,
+                    estimatedValue = pricing.amount.toDouble(),
                     details = buildString {
                         append("Subject: ${pitch.subjectLine}\n\n")
                         append("${pitch.personalizedPitchMessage}\n\n")
@@ -892,7 +937,9 @@ class DashboardViewModel(
                     },
                     logs = listOf(
                         "Discovered via ${searchResult.providerUsed} on ${prospect.sourcePlatform}",
-                        "Proposal drafted via $engineUsed"
+                        "Proposal drafted via $engineUsed",
+                        "Selected outreach tone: ${outreachTone.name}",
+                        "Dynamic audit quote: $${pricing.amount} (${pricing.segment})"
                     )
                 )
                 repository.createTask(task)
@@ -906,7 +953,7 @@ class DashboardViewModel(
                     status = "Pitched",
                     leadSource = prospect.sourcePlatform,
                     pitchMessage = pitch.personalizedPitchMessage,
-                    estimatedValue = 0.0
+                    estimatedValue = pricing.amount.toDouble()
                 )
                 clientRepository?.upsertClient(crmLead)
             }
@@ -1289,6 +1336,8 @@ class DashboardViewModel(
             if (res.isSuccess) {
                 val list = res.getOrThrow()
                 for (item in list) {
+                    replyRateRepository.recordInboundReply(item.senderEmail)
+                    LiveWorkerLogStore.record("AI Closer", "> Matched inbound reply to a prior pitch using hashed recipient data.")
                     draftObjectionReply(
                         senderName = item.senderName,
                         senderEmail = item.senderEmail,
@@ -1301,5 +1350,15 @@ class DashboardViewModel(
                 onResult(false, 0, res.exceptionOrNull()?.message ?: "Webhook fetch failed")
             }
         }
+    }
+
+    private fun toneForTask(task: Task): OutreachTone {
+        val savedTone = task.logs.firstNotNullOfOrNull { log ->
+            log.substringAfter("Selected outreach tone:", "")
+                .trim()
+                .takeIf { it.isNotBlank() }
+        }
+        return OutreachTone.values().firstOrNull { it.name.equals(savedTone, ignoreCase = true) }
+            ?: OutreachTone.PROFESSIONAL
     }
 }

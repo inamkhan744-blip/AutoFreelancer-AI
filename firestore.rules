@@ -95,5 +95,20 @@ service cloud.firestore {
         incoming().payment_link_url is string && incoming().payment_link_url.size() <= 2048;
       allow delete: if isSignedIn() && request.auth.uid == userId && settingId == 'api_keys';
     }
+
+    match /users/{userId}/reply_rate_events/{eventId} {
+      allow get, list: if isSignedIn() && request.auth.uid == userId;
+      allow create: if isSignedIn() && request.auth.uid == userId &&
+        incoming().keys().hasOnly(['recipientHash', 'tone', 'replied', 'sentAt']) &&
+        incoming().keys().hasAll(['recipientHash', 'tone', 'replied', 'sentAt']) &&
+        incoming().recipientHash is string && incoming().recipientHash.matches('^[a-f0-9]{64}$') &&
+        incoming().tone in ['FRIENDLY', 'PROFESSIONAL', 'AGGRESSIVE'] &&
+        incoming().replied == false && incoming().sentAt is timestamp && incoming().sentAt <= request.time;
+      allow update: if isSignedIn() && request.auth.uid == userId &&
+        existing().replied == false && incoming().replied == true &&
+        incoming().repliedAt is timestamp && incoming().repliedAt <= request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['replied', 'repliedAt']);
+      allow delete: if false;
+    }
   }
 }

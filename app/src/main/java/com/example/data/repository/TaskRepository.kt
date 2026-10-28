@@ -5,6 +5,7 @@ import android.util.Log
 import com.example.data.error.OperationType
 import com.example.data.error.handleFirestoreError
 import com.example.data.model.Task
+import com.example.util.LiveWorkerLogStore
 import com.google.firebase.Firebase
 import com.google.firebase.auth.auth
 import com.google.firebase.firestore.FieldValue
@@ -287,6 +288,7 @@ class TaskRepository(
     }
 
     suspend fun updateTaskStatus(taskId: String, newStatus: String, newLog: String? = null): Result<Unit> {
+        if (!newLog.isNullOrBlank()) LiveWorkerLogStore.record("Task Worker", newLog)
         val uid = auth?.currentUser?.uid
         if (db != null && uid != null) {
             val docRef = db.collection("users").document(uid).collection("tasks").document(taskId)
@@ -332,6 +334,7 @@ class TaskRepository(
         appendDetails: String? = null,
         newLog: String? = null
     ): Result<Unit> {
+        if (!newLog.isNullOrBlank()) LiveWorkerLogStore.record("Task Worker", newLog)
         val uid = auth?.currentUser?.uid
         if (db != null && uid != null) {
             val docRef = db.collection("users").document(uid).collection("tasks").document(taskId)

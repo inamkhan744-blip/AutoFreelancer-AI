@@ -12,14 +12,19 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.example.data.model.CrmClient
+import com.example.data.model.OutreachTone
 import com.example.data.model.Task
+import com.example.data.repository.ReplyRateRepository
 import com.example.data.repository.ClientRepository
 import com.example.data.repository.SettingsRepository
 import com.example.data.repository.TaskRepository
 import com.example.data.service.AiOrchestrationService
 import com.example.data.service.BrevoEmailService
+import com.example.data.service.CompetitorSpyPrompt
+import com.example.data.service.DynamicPricingEngine
 import com.example.data.service.SearchProspectService
 import com.example.util.BusinessEmailValidator
+import com.example.util.LiveWorkerLogStore
 import kotlinx.coroutines.flow.first
 import java.util.concurrent.TimeUnit
 
@@ -32,6 +37,7 @@ class AutoPilotWorker(
 
     override suspend fun doWork(): Result {
         Log.i(tag, "Auto-Pilot worker triggered in background")
+        LiveWorkerLogStore.record("Auto-Pilot", "> Background worker started.")
         val context = applicationContext
         val settingsRepo = SettingsRepository(context)
         runCatching { settingsRepo.loadCloudSettings() }
@@ -48,6 +54,8 @@ class AutoPilotWorker(
         val aiService = AiOrchestrationService()
         val searchService = SearchProspectService()
         val emailService = BrevoEmailService()
+        val replyRateRepository = ReplyRateRepository()
+        val pricingEngine = DynamicPricingEngine(aiService)
 
         try {
             // 1. Process all currently PENDING tasks automatically
@@ -63,6 +71,8 @@ class AutoPilotWorker(
                     taskRepo = taskRepo,
                     clientRepo = clientRepo,
                     aiService = aiService,
+                    replyRateRepository = replyRateRepository,
+                    pricingEngine = pricingEngine,
                     searchService = searchService,
                     emailService = emailService
                 )
@@ -72,6 +82,7 @@ class AutoPilotWorker(
             val canRunDiscovery = settings.isSearchConfigured || settings.isAiConfigured
             if (canRunDiscovery) {
                 Log.i(tag, "Running autonomous lead discovery in background...")
+                LiveWorkerLogStore.record("Apollo-Scout", "> Scraping Reddit, LinkedIn, and web search results...")
                 val searchResult = searchService.searchWithFallback(
                     query = settings.searchQuery,
                     serperKey = settings.serperApiKey,
@@ -87,9 +98,23 @@ class AutoPilotWorker(
                         }
                 }.take(2)
                 for ((prospect, discoveredEmail) in leads) {
+                    val outreachTone = replyRateRepository.bestPerformingTone()
+                    val targetWebsite = CompetitorSpyPrompt.websiteFor(prospect)
+                    LiveWorkerLogStore.record("Apollo-Scout", "> Analyzing business scale for a dynamic quote...")
+                    val pricing = pricingEngine.decide(
+                        website = targetWebsite,
+                        context = "${prospect.title}\n${prospect.snippet}",
+                        geminiApiKey = settings.geminiApiKey,
+                        openRouterApiKey = settings.openRouterApiKey,
+                        geminiModel = settings.geminiModel,
+                        openRouterModel = settings.openRouterModel
+                    )
+                    val dynamicPaymentLink = pricingEngine.paymentLinkForAmount(settings.paymentLinkUrl, pricing.amount)
+                    LiveWorkerLogStore.record("Apollo-Scout", "> ${prospect.sourcePlatform}: selected $${pricing.amount}; tone ${outreachTone.promptLabel}.")
 
-                    val prompt = "Write a high-converting, personalized client pitch for this lead looking for an SEO audit:\nTitle: ${prospect.title}\nContext: ${prospect.snippet}\nLink: ${prospect.link}"
-                    val systemPrompt = "You are Apollo-Scout, an elite autonomous freelance SEO scout. Formulate a personalized outreach message with clear findings."
+                    val prompt = "Write a persuasive personalized pitch.\nTitle: ${prospect.title}\nContext: ${prospect.snippet}\nClient website: ${targetWebsite.ifBlank { "not provided" }}\nSource: ${prospect.link}\n\n${CompetitorSpyPrompt.instructionsFor(prospect)}\nQuote $${pricing.amount} in a ${outreachTone.promptLabel.lowercase()} tone."
+                    val systemPrompt = "You are Apollo-Scout. Compare the client's site with three plausible direct competitors and write in a ${outreachTone.promptLabel.lowercase()} tone. Be explicit when findings are hypotheses; never fabricate live browsing."
+                    LiveWorkerLogStore.record("Apollo-Scout", "> Comparing three likely competitors and generating price...")
 
                     val aiRes = aiService.generateContentWithFallback(
                         geminiApiKey = settings.geminiApiKey,
@@ -107,8 +132,8 @@ class AutoPilotWorker(
                         "Saw your request for an SEO audit. We can deliver a comprehensive technical analysis."
                     }
 
-                    if (settings.paymentLinkUrl.isNotBlank()) {
-                        pitchBody += "\n\nTo get the full SEO audit report, please complete the payment here: ${settings.paymentLinkUrl.trim()}"
+                    if (dynamicPaymentLink.isNotBlank()) {
+                        pitchBody += "\n\nThe ${outreachTone.promptLabel.lowercase()} audit package is $${pricing.amount}. Complete payment here: $dynamicPaymentLink"
                     }
 
                     val autoTask = Task(
@@ -120,7 +145,7 @@ class AutoPilotWorker(
                         priority = "HIGH",
                         client = "${prospect.sourcePlatform} Lead",
                         clientEmail = discoveredEmail,
-                        estimatedValue = 0.0,
+                        estimatedValue = pricing.amount.toDouble(),
                         details = buildString {
                             append("AUTONOMOUS BACKGROUND OUTREACH:\n\n")
                             append(pitchBody)
@@ -128,7 +153,9 @@ class AutoPilotWorker(
                         },
                         logs = listOf(
                             "⚡ [Auto-Pilot] Discovered prospect via ${searchResult.providerUsed} on ${prospect.sourcePlatform}",
-                            "⚡ [Auto-Pilot] Proposal formulated with dynamic CTA and finalized."
+                            "⚡ [Auto-Pilot] Proposal formulated with dynamic CTA and finalized.",
+                            "Selected outreach tone: ${outreachTone.name}",
+                            "Dynamic audit quote: $${pricing.amount} (${pricing.segment})"
                         )
                     )
 
@@ -144,6 +171,7 @@ class AutoPilotWorker(
                                 bodyText = pitchBody
                             )
                             if (sendRes.isSuccess) {
+                                replyRateRepository.recordSentPitch(discoveredEmail, outreachTone)
                                 taskRepo.updateTaskStatus(
                                     taskId = autoTask.id,
                                     newStatus = "COMPLETED",
@@ -175,7 +203,7 @@ class AutoPilotWorker(
                         status = "Pitched",
                         leadSource = "Auto-Pilot Discovery",
                         pitchMessage = pitchBody,
-                        estimatedValue = 0.0
+                        estimatedValue = pricing.amount.toDouble()
                     )
                     clientRepo.upsertClient(crmLead)
                 }
@@ -194,6 +222,8 @@ class AutoPilotWorker(
         taskRepo: TaskRepository,
         clientRepo: ClientRepository,
         aiService: AiOrchestrationService,
+        replyRateRepository: ReplyRateRepository,
+        pricingEngine: DynamicPricingEngine,
         searchService: SearchProspectService,
         emailService: BrevoEmailService
     ) {
@@ -211,7 +241,21 @@ class AutoPilotWorker(
             tavilyKey = settings.tavilyApiKey
         )
 
-        // 2. Generate Deliverable with Payment Link
+        val outreachTone = replyRateRepository.bestPerformingTone()
+        val targetWebsite = searchResult.leads.firstOrNull()?.let(CompetitorSpyPrompt::websiteFor).orEmpty()
+        val pricing = pricingEngine.decide(
+            website = targetWebsite,
+            context = "${task.client}\n${task.title}\n${task.details}",
+            geminiApiKey = settings.geminiApiKey,
+            openRouterApiKey = settings.openRouterApiKey,
+            geminiModel = settings.geminiModel,
+            openRouterModel = settings.openRouterModel
+        )
+        val dynamicPaymentLink = pricingEngine.paymentLinkForAmount(settings.paymentLinkUrl, pricing.amount)
+        LiveWorkerLogStore.record(task.workerName, "> Applying ${outreachTone.promptLabel} tone and $${pricing.amount} quote.")
+        LiveWorkerLogStore.record(task.workerName, "> Comparing client website with three likely competitors...")
+
+        // 2. Generate Deliverable with dynamic pricing and payment link
         val aiResult = aiService.generateTaskDeliverable(
             geminiApiKey = settings.geminiApiKey,
             openRouterApiKey = settings.openRouterApiKey,
@@ -223,15 +267,18 @@ class AutoPilotWorker(
             workerName = task.workerName,
             workerRole = task.workerRole,
             leads = searchResult.leads,
-            paymentLinkUrl = settings.paymentLinkUrl
+            paymentLinkUrl = dynamicPaymentLink,
+            outreachTone = outreachTone,
+            targetWebsite = targetWebsite,
+            dynamicPrice = pricing.amount
         )
 
         val deliverableContent = if (aiResult.isSuccess) {
             aiResult.getOrThrow().content
         } else {
             val fallbackText = "Comprehensive SEO audit formulated for ${task.client}."
-            if (settings.paymentLinkUrl.isNotBlank()) {
-                "$fallbackText\n\nTo get the full SEO audit report, please complete the payment here: ${settings.paymentLinkUrl.trim()}"
+            if (dynamicPaymentLink.isNotBlank()) {
+                "$fallbackText\n\nThe ${outreachTone.promptLabel.lowercase()} audit package is $${pricing.amount}. Complete payment here: $dynamicPaymentLink"
             } else {
                 fallbackText
             }
@@ -267,6 +314,8 @@ class AutoPilotWorker(
                 )
                 if (emailRes.isSuccess) {
                     val sent = emailRes.getOrThrow()
+                    replyRateRepository.recordSentPitch(targetEmail, outreachTone)
+                    LiveWorkerLogStore.record(task.workerName, "> Pitch sent; reply-rate event recorded.")
                     taskRepo.updateTaskStatus(
                         taskId = task.id,
                         newStatus = "COMPLETED",
@@ -298,7 +347,7 @@ class AutoPilotWorker(
             status = "Pitched",
             leadSource = "Auto-Pilot Worker",
             pitchMessage = deliverableContent,
-            estimatedValue = task.estimatedValue
+            estimatedValue = pricing.amount.toDouble()
         )
         clientRepo.upsertClient(crmClient)
     }
