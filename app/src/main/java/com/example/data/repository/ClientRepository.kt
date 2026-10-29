@@ -3,32 +3,20 @@ package com.example.data.repository
 import android.content.Context
 import android.util.Log
 import com.example.data.model.CrmClient
-import com.google.firebase.Firebase
-import com.google.firebase.auth.auth
-import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.callbackFlow
-import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import java.io.File
-import java.util.UUID
 
 class ClientRepository(
-    private val db: FirebaseFirestore? = null,
-    private val context: Context? = null
+    private val context: Context
 ) {
     private val tag = "ClientRepository"
-    private val auth by lazy { runCatching { Firebase.auth }.getOrNull() }
     private val localClientsFlow = MutableStateFlow<List<CrmClient>>(emptyList())
-    private val storageFile: File? = context?.filesDir?.let { File(it, "autofreelancer_crm_clients.json") }
-
-    constructor(context: Context) : this(db = null, context = context.applicationContext)
-    constructor(db: FirebaseFirestore) : this(db = db, context = null)
+    private val storageFile: File? = context.filesDir.let { File(it, "autofreelancer_crm_clients.json") }
 
     init {
         loadLocalClients()
@@ -71,32 +59,7 @@ class ClientRepository(
     }
 
     fun observeClients(): Flow<List<CrmClient>> {
-        val uid = auth?.currentUser?.uid
-        if (db != null && uid != null) {
-            return callbackFlow {
-                val collectionRef = db.collection("users").document(uid).collection("clients")
-                val registration = collectionRef.addSnapshotListener { snapshot, error ->
-                    if (error != null) {
-                        Log.w(tag, "Firestore observe clients error: ${error.message}")
-                        trySend(localClientsFlow.value)
-                        return@addSnapshotListener
-                    }
-                    if (snapshot != null) {
-                        val clients = snapshot.documents.mapNotNull { doc ->
-                            doc.data?.let { CrmClient.fromMap(doc.id, it) }
-                        }
-                        if (clients.isNotEmpty()) {
-                            saveLocalClients(clients)
-                            trySend(clients)
-                        } else {
-                            trySend(localClientsFlow.value)
-                        }
-                    }
-                }
-                awaitClose { registration.remove() }
-            }
-        }
-
+        // Ab sirf local memory se data aayega
         return localClientsFlow.asStateFlow()
     }
 
@@ -130,19 +93,7 @@ class ClientRepository(
             existing.add(0, finalClient)
         }
         saveLocalClients(existing)
-
-        val uid = auth?.currentUser?.uid
-        if (db != null && uid != null) {
-            try {
-                db.collection("users").document(uid).collection("clients")
-                    .document(finalClient.id)
-                    .set(finalClient.toMap())
-                    .await()
-            } catch (e: Exception) {
-                Log.w(tag, "Firestore client sync skipped or failed: ${e.message}")
-            }
-        }
-
+        
         Result.success(finalClient.id)
     }
 
@@ -171,26 +122,6 @@ class ClientRepository(
             )
             existing[index] = updated
             saveLocalClients(existing)
-
-            val uid = auth?.currentUser?.uid
-            if (db != null && uid != null) {
-                try {
-                    db.collection("users").document(uid).collection("clients")
-                        .document(clientId)
-                        .update(
-                            mapOf(
-                                "status" to validStatus,
-                                "pipelineStage" to validStatus,
-                                "updatedAt" to System.currentTimeMillis(),
-                                "lastContactedAt" to updated.lastContactedAt,
-                                "nextFollowUpAt" to updated.nextFollowUpAt
-                            )
-                        )
-                        .await()
-                } catch (e: Exception) {
-                    Log.w(tag, "Firestore status update failed: ${e.message}")
-                }
-            }
             Result.success(Unit)
         } else {
             Result.failure(NoSuchElementException("Client $clientId not found"))
@@ -204,18 +135,6 @@ class ClientRepository(
             val updated = existing[index].copy(seoReport = report, updatedAt = System.currentTimeMillis())
             existing[index] = updated
             saveLocalClients(existing)
-
-            val uid = auth?.currentUser?.uid
-            if (db != null && uid != null) {
-                try {
-                    db.collection("users").document(uid).collection("clients")
-                        .document(clientId)
-                        .update("seoReport", report, "updatedAt", System.currentTimeMillis())
-                        .await()
-                } catch (e: Exception) {
-                    Log.w(tag, "Firestore report update failed: ${e.message}")
-                }
-            }
             Result.success(Unit)
         } else {
             Result.failure(NoSuchElementException("Client $clientId not found"))
@@ -228,18 +147,6 @@ class ClientRepository(
         if (index != -1) {
             existing.removeAt(index)
             saveLocalClients(existing)
-
-            val uid = auth?.currentUser?.uid
-            if (db != null && uid != null) {
-                try {
-                    db.collection("users").document(uid).collection("clients")
-                        .document(clientId)
-                        .delete()
-                        .await()
-                } catch (e: Exception) {
-                    Log.w(tag, "Firestore client delete failed: ${e.message}")
-                }
-            }
             Result.success(Unit)
         } else {
             Result.failure(NoSuchElementException("Client $clientId not found"))
