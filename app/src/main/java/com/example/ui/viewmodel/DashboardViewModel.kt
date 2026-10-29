@@ -34,6 +34,7 @@ import com.example.data.model.InboxEmail
 import com.example.data.repository.InboxRepository
 import com.example.data.service.AiCloserService
 import com.example.util.BusinessEmailValidator
+import com.example.util.ProspectDeduplicator
 import com.example.data.service.ElevenLabsVoiceService
 import com.example.data.service.GeneratedVoiceNote
 import com.example.data.service.EmailAttachment
@@ -548,17 +549,31 @@ class DashboardViewModel(
                         }
 
                         // Feature 3: Automatically persist lead into CRM (Firestore & Local)
-                        val crmClient = CrmClient(
-                            name = task.client,
-                            company = task.category,
-                            websiteUrl = searchResult.leads.firstOrNull()?.link.orEmpty(),
-                            email = targetEmail,
-                            status = "Pitched",
-                            leadSource = "AI Worker",
-                            pitchMessage = aiContent,
-                            estimatedValue = pricing.amount.toDouble()
+                        val crmLeadUrl = searchResult.leads.firstOrNull()?.link.orEmpty()
+                        val existingTasks = repository.observeTasks().first()
+                            .filterNot { it.id == task.id }
+                        val knownProspects = ProspectDeduplicator(
+                            tasks = existingTasks,
+                            clients = clientRepository?.observeClients()?.first().orEmpty()
                         )
-                        clientRepository?.upsertClient(crmClient)
+                        if (knownProspects.contains(crmLeadUrl, targetEmail)) {
+                            LiveWorkerLogStore.record(
+                                task.workerName,
+                                "> Skipped CRM creation because this prospect already exists."
+                            )
+                        } else {
+                            val crmClient = CrmClient(
+                                name = task.client,
+                                company = task.category,
+                                websiteUrl = crmLeadUrl,
+                                email = targetEmail,
+                                status = "Pitched",
+                                leadSource = "AI Worker",
+                                pitchMessage = aiContent,
+                                estimatedValue = pricing.amount.toDouble()
+                            )
+                            clientRepository?.upsertClient(crmClient)
+                        }
                     } else {
                         val err = aiResult.exceptionOrNull()?.message ?: "AI generation failed"
                         repository.updateTaskStatus(
@@ -835,9 +850,23 @@ class DashboardViewModel(
                 tavilyKey = currentConfig.tavilyApiKey
             )
 
+            val knownProspects = ProspectDeduplicator(
+                tasks = repository.observeTasks().first(),
+                clients = clientRepository?.observeClients()?.first().orEmpty()
+            )
             val qualifiedProspects = searchResult.leads.mapNotNull { prospect ->
-                BusinessEmailValidator.findIn("${prospect.snippet}\n${prospect.title}")
-                    ?.let { prospect to it }
+                val discoveredEmail = BusinessEmailValidator.findIn("${prospect.snippet}\n${prospect.title}")
+                    ?: return@mapNotNull null
+                if (knownProspects.contains(prospect.link, discoveredEmail)) {
+                    LiveWorkerLogStore.record(
+                        "Apollo-Scout",
+                        "> Skipping existing prospect: ${prospect.link}"
+                    )
+                    null
+                } else {
+                    knownProspects.remember(prospect.link, discoveredEmail)
+                    prospect to discoveredEmail
+                }
             }
             val prospects = qualifiedProspects.map { it.first }
             if (prospects.isEmpty()) {
@@ -915,8 +944,6 @@ class DashboardViewModel(
                     outreachTone = outreachTone
                 )
 
-                generatedPitches.add(pitch)
-
                 // Add real discovered task to repository
                 val task = Task(
                     title = "Pitching SEO Audit to ${prospect.title.take(40)}",
@@ -942,7 +969,13 @@ class DashboardViewModel(
                         "Dynamic audit quote: $${pricing.amount} (${pricing.segment})"
                     )
                 )
-                repository.createTask(task)
+                val taskResult = repository.createTask(task)
+                if (taskResult.isFailure) {
+                    val error = taskResult.exceptionOrNull()?.message ?: "Unable to save discovered lead task."
+                    LiveWorkerLogStore.record("Apollo-Scout", "> Failed to save task for ${prospect.link}: $error")
+                    continue
+                }
+                generatedPitches.add(pitch)
 
                 // Feature 3: Automatically persist discovered prospect into CRM
                 val crmLead = CrmClient(

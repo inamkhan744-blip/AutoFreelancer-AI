@@ -100,6 +100,7 @@ class TaskRepositoryLocalTest {
             status = "PENDING",
             priority = "MEDIUM",
             client = "LawFirm Solutions",
+            clientEmail = "prospect@lawfirm.example",
             estimatedValue = 1600.0,
             details = "Identify top 50 low-competition legal terms"
         )
@@ -110,5 +111,6 @@ class TaskRepositoryLocalTest {
         val retrieved = repository.getTaskById(customTask.id).getOrThrow()
         assertEquals(customTask.title, retrieved.title)
         assertEquals(customTask.client, retrieved.client)
+        assertEquals(customTask.clientEmail, retrieved.clientEmail)
     }
 }

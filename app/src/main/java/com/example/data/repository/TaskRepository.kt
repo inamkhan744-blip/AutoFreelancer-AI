@@ -179,6 +179,7 @@ class TaskRepository(
                     "status" to task.status,
                     "priority" to task.priority,
                     "client" to task.client,
+                    "clientEmail" to task.clientEmail,
                     "estimatedValue" to task.estimatedValue,
                     "details" to task.details,
                     "createdAt" to FieldValue.serverTimestamp(),
