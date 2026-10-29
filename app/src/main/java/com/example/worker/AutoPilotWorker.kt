@@ -26,6 +26,7 @@ import com.example.data.service.SearchProspectService
 import com.example.util.BusinessEmailValidator
 import com.example.util.LiveWorkerLogStore
 import com.example.util.ProspectDeduplicator
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import java.util.concurrent.TimeUnit
 
@@ -37,28 +38,33 @@ class AutoPilotWorker(
     private val tag = "AutoPilotWorker"
 
     override suspend fun doWork(): Result {
-        Log.i(tag, "Auto-Pilot worker triggered in background")
-        LiveWorkerLogStore.record("Auto-Pilot", "> Background worker started.")
-        val context = applicationContext
-        val settingsRepo = SettingsRepository(context)
-        runCatching { settingsRepo.loadCloudSettings() }
-            .onFailure { Log.e(tag, "Failed to load cloud settings: ${it.message}", it) }
-        val settings = settingsRepo.settingsFlow.value
-
-        if (!settings.autoPilotEnabled) {
-            Log.i(tag, "Auto-Pilot is currently disabled in Settings. Exiting job.")
-            return Result.success()
-        }
-
-        val taskRepo = TaskRepository(context)
-        val clientRepo = ClientRepository(context)
-        val aiService = AiOrchestrationService()
-        val searchService = SearchProspectService()
-        val emailService = BrevoEmailService()
-        val replyRateRepository = ReplyRateRepository()
-        val pricingEngine = DynamicPricingEngine(aiService)
-
         try {
+            Log.i(tag, "Auto-Pilot worker triggered in background")
+            LiveWorkerLogStore.record("Auto-Pilot", "> Background worker started.")
+            val context = applicationContext
+            val settingsRepo = SettingsRepository(context)
+            try {
+                settingsRepo.loadCloudSettings()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(tag, "Failed to load cloud settings: ${e.message}", e)
+            }
+            val settings = settingsRepo.settingsFlow.value
+
+            if (!settings.autoPilotEnabled) {
+                Log.i(tag, "Auto-Pilot is currently disabled in Settings. Exiting job.")
+                return Result.success()
+            }
+
+            val taskRepo = TaskRepository(context)
+            val clientRepo = ClientRepository(context)
+            val aiService = AiOrchestrationService()
+            val searchService = SearchProspectService()
+            val emailService = BrevoEmailService()
+            val replyRateRepository = ReplyRateRepository()
+            val pricingEngine = DynamicPricingEngine(aiService)
+
             // 1. Process all currently PENDING tasks automatically
             val currentTasks = taskRepo.observeTasks().first()
             val pendingTasks = currentTasks.filter { it.status == "PENDING" }
@@ -107,6 +113,7 @@ class AutoPilotWorker(
                         prospect to discoveredEmail
                     }
                 }.take(3)
+
                 for ((prospect, discoveredEmail) in leads) {
                     val outreachTone = replyRateRepository.bestPerformingTone()
                     val targetWebsite = CompetitorSpyPrompt.websiteFor(prospect)
@@ -122,8 +129,8 @@ class AutoPilotWorker(
                     val dynamicPaymentLink = pricingEngine.paymentLinkForAmount(settings.paymentLinkUrl, pricing.amount)
                     LiveWorkerLogStore.record("Apollo-Scout", "> ${prospect.sourcePlatform}: selected $${pricing.amount}; tone ${outreachTone.promptLabel}.")
 
-                    val prompt = "Write a persuasive personalized pitch.\nTitle: ${prospect.title}\nContext: ${prospect.snippet}\nClient website: ${targetWebsite.ifBlank { "not provided" }}\nSource: ${prospect.link}\n\n${CompetitorSpyPrompt.instructionsFor(prospect)}\nQuote $${pricing.amount} in a ${outreachTone.promptLabel.lowercase()} tone."
-                    val systemPrompt = "You are Apollo-Scout. Compare the client's site with three plausible direct competitors and write in a ${outreachTone.promptLabel.lowercase()} tone. Be explicit when findings are hypotheses; never fabricate live browsing."
+                    val prompt = "Write a persuasive personalized pitch.\nTitle: ${prospect.title}\nContext: ${prospect.snippet}\nClient website: ${targetWebsite.ifBlank { "not provided" }}\nSource platform: ${prospect.sourcePlatform}"
+                    val systemPrompt = "You are Apollo-Scout. Compare the client's site with three plausible direct competitors and write in a ${outreachTone.promptLabel.lowercase()} tone. Be explicit, concise, and conversion-focused."
                     LiveWorkerLogStore.record("Apollo-Scout", "> Comparing three likely competitors and generating price...")
 
                     val aiRes = aiService.generateContentWithFallback(
@@ -195,6 +202,8 @@ class AutoPilotWorker(
             }
 
             return Result.success()
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(tag, "Auto-Pilot execution encountered error: ${e.message}", e)
             return Result.failure()
