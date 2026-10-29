@@ -1,10 +1,12 @@
 package com.example.data.repository
 
 import android.content.Context
+import android.util.Log
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.auth
 import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -91,23 +93,29 @@ class SettingsRepository(
     }
 
     suspend fun loadCloudSettings() {
-        val userId = auth?.currentUser?.uid
+        val userId = runCatching { auth?.currentUser?.uid }.getOrNull()
         if (userId == null) {
-            _settingsFlow.value = _settingsFlow.value.copy(
-                geminiApiKey = "",
-                openRouterApiKey = "",
-                serperApiKey = "",
-                tavilyApiKey = "",
-                elevenLabsApiKey = "",
-                brevoApiKey = "",
-                paymentLinkUrl = ""
-            )
+            clearCloudKeys()
             return
         }
 
-        val document = requireNotNull(firestore) { "Firestore is unavailable." }
-            .collection("users").document(userId).collection("settings").document("api_keys")
-            .get().await()
+        val db = firestore
+        if (db == null) {
+            clearCloudKeys()
+            return
+        }
+
+        val document = try {
+            db.collection("users").document(userId).collection("settings").document("api_keys")
+                .get().await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w("SettingsRepository", "Cloud API keys unavailable; using empty keys: ${e.message}")
+            clearCloudKeys()
+            return
+        }
+
         _settingsFlow.value = _settingsFlow.value.copy(
             geminiApiKey = document.getString("gemini_api_key").orEmpty(),
             openRouterApiKey = document.getString("openrouter_api_key").orEmpty(),
@@ -116,6 +124,18 @@ class SettingsRepository(
             elevenLabsApiKey = document.getString("elevenlabs_api_key").orEmpty(),
             brevoApiKey = document.getString("brevo_api_key").orEmpty(),
             paymentLinkUrl = document.getString("payment_link_url").orEmpty()
+        )
+    }
+
+    private fun clearCloudKeys() {
+        _settingsFlow.value = _settingsFlow.value.copy(
+            geminiApiKey = "",
+            openRouterApiKey = "",
+            serperApiKey = "",
+            tavilyApiKey = "",
+            elevenLabsApiKey = "",
+            brevoApiKey = "",
+            paymentLinkUrl = ""
         )
     }
 
