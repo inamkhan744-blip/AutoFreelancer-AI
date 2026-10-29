@@ -33,17 +33,17 @@ class BrevoEmailService(
     private val accountEndpoint = "https://api.brevo.com/v3/account"
 
     fun generateMiniAuditPoints(siteUrl: String): List<String> {
-        val cleanSite = siteUrl.trim().ifBlank { "your website" }
-        val normalized = if (cleanSite.startsWith("http://", true) || cleanSite.startsWith("https://", true)) {
-            cleanSite
+        val rawSite = siteUrl.trim().ifBlank { "your website" }
+        val safeSite = if (rawSite.startsWith("http://", true) || rawSite.startsWith("https://", true)) {
+            rawSite
         } else {
-            "https://$cleanSite"
+            "https://$rawSite"
         }
 
         return listOf(
-            "Mobile UX & speed: check Core Web Vitals and compress oversized images or scripts on $normalized.",
-            "On-page SEO: tighten title tags, H1s, meta descriptions, and internal linking around the main services pages.",
-            "Technical SEO: audit indexability, crawl errors, schema markup, and internal links to make the site easier for Google to understand."
+            "Mobile UX & speed: check Core Web Vitals and compress oversized images or scripts on $safeSite.",
+            "On-page SEO: tighten title tags, H1s, meta descriptions, and internal linking around the main service pages.",
+            "Technical SEO: audit indexability, crawl errors, schema markup, and internal links so Google can understand the site faster."
         )
     }
 
@@ -51,6 +51,7 @@ class BrevoEmailService(
         val cleanBody = bodyText
             .replace("\r\n", "\n")
             .replace("\n", "<br><br>")
+
         val auditHtml = if (miniAuditPoints.isNotEmpty()) {
             val items = miniAuditPoints.joinToString("") { point ->
                 "<li style=\"margin: 0 0 8px; color: #1f2937;\">$point</li>"
