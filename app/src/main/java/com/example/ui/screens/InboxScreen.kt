@@ -557,6 +557,72 @@ private fun InboxEmailCard(
                 }
             }
 
+            // AI Reasoning Mode & Strategic Objection Analysis Box
+            if (email.reasoningAnalysis.isNotBlank() || email.reasoningStrategy.isNotBlank() || email.nextBestAction.isNotBlank()) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("closer_reasoning_card"),
+                    colors = CardDefaults.cardColors(
+                        containerColor = CyberPrimary.copy(alpha = 0.08f)
+                    ),
+                    shape = RoundedCornerShape(10.dp),
+                    border = CardDefaults.outlinedCardBorder().copy(
+                        brush = androidx.compose.ui.graphics.Brush.horizontalGradient(
+                            listOf(CyberPrimary.copy(alpha = 0.4f), CyberSecondary.copy(alpha = 0.4f))
+                        )
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.AutoAwesome,
+                                contentDescription = null,
+                                tint = CyberPrimaryLight,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = "AI Closer • Reasoning Mode Analysis",
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                color = CyberPrimaryLight
+                            )
+                        }
+
+                        if (email.reasoningAnalysis.isNotBlank()) {
+                            Text(
+                                text = "Analysis: ${email.reasoningAnalysis}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+
+                        if (email.reasoningStrategy.isNotBlank()) {
+                            Text(
+                                text = "Psychological Strategy: ${email.reasoningStrategy}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = CyberSecondary
+                            )
+                        }
+
+                        if (email.nextBestAction.isNotBlank()) {
+                            Text(
+                                text = "Next Best Action: ${email.nextBestAction}",
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                color = CyberSuccess
+                            )
+                        }
+                    }
+                }
+            }
+
             // Gemini Drafted Closer Response
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Row(

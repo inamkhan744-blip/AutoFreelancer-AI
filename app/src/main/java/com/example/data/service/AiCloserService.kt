@@ -14,7 +14,10 @@ import java.util.concurrent.TimeUnit
 data class ObjectionHandlingResult(
     val objectionCategory: String,
     val draftedReply: String,
-    val providerUsed: String
+    val providerUsed: String,
+    val reasoningAnalysis: String = "",
+    val reasoningStrategy: String = "",
+    val nextBestAction: String = ""
 )
 
 class AiCloserService(
@@ -27,8 +30,9 @@ class AiCloserService(
     private val tag = "AiCloserService"
 
     /**
-     * Uses Gemini AI (with OpenRouter fallback) to analyze the incoming client email,
-     * classify the objection, and craft an elite, high-converting objection-handling response.
+     * Uses Gemini AI (with OpenRouter fallback) in "Reasoning Mode" to analyze
+     * the incoming client email thread, formulate strategic reasoning, determine
+     * the next best action, and craft an elite objection-handling response.
      */
     suspend fun analyzeAndDraftReply(
         senderName: String,
@@ -39,37 +43,52 @@ class AiCloserService(
         openRouterApiKey: String,
         geminiModel: String = AiOrchestrationService.PRIMARY_GEMINI_MODEL,
         openRouterModel: String = AiOrchestrationService.FALLBACK_OPENROUTER_MODEL,
-        paymentLinkUrl: String = ""
+        paymentLinkUrl: String = "",
+        bookingLinkUrl: String = "",
+        agencyName: String = "Apex Growth Agency"
     ): Result<ObjectionHandlingResult> = withContext(Dispatchers.IO) {
         val systemPrompt = """
-            You are 'The Closer', a world-class autonomous freelance sales executive and agency objection handler.
-            Your role is to read inbound client emails, identify their primary objection (e.g., budget is too tight, no time right now, skeptics on ROI, comparing to competitors),
-            and draft a persuasive, polite, empathetic, yet assertive response that turns hesitation into a signed deal.
+            You are 'The Closer', the AI Sales Partner and Principal Negotiator at $agencyName.
+            You operate in explicit REASONING MODE before drafting every reply.
+            
+            You must structure your response with three analytical tags followed by the final draft:
+            <Analysis>
+            [Deep breakdown of the prospect's underlying hesitation, real objection, and emotional state]
+            </Analysis>
+            <Reasoning>
+            [Psychological reframing strategy, risk reversal tactic, and positioning angle to deploy]
+            </Reasoning>
+            <Next Best Action>
+            [Action recommendation: e.g. Book 10-min strategy call / Offer 50% split deposit / Send Loom demo]
+            </Next Best Action>
+            
+            DRAFT REPLY:
+            [The complete, elegant, high-converting email ready to send to the client]
             
             RULES:
-            1. Empathize with their specific objection first.
-            2. Reframe the objection into a massive opportunity or ROI justification.
-            3. Provide clear next steps (call, review proposal, or complete payment).
-            4. Keep the tone warm, confident, and professional.
-            5. Do NOT include placeholder tokens like [Your Name] or [Agency Name] — sign off as "AutoFreelancer Agency Director".
+            1. Empathize with their specific objection first without being defensive.
+            2. Reframe the objection into measurable ROI and missed revenue.
+            3. Include a zero-friction next step (using ${if (bookingLinkUrl.isNotBlank()) "the booking link: $bookingLinkUrl" else "a 10-minute discovery call"}).
+            4. Sign off respectfully as "$agencyName Team". Never use bracket placeholders.
         """.trimIndent()
 
         val userPrompt = """
-            Analyze this incoming client email and draft the ideal response to close the deal:
-            
-            CLIENT NAME: $senderName
-            CLIENT EMAIL: $senderEmail
-            EMAIL SUBJECT: $subject
-            INCOMING MESSAGE:
+            PROSPECT THREAD TO ANALYZE:
+            Client Name: $senderName
+            Client Email: $senderEmail
+            Subject: $subject
+            Incoming Message:
             \"\"\"
             $incomingMessage
             \"\"\"
             
-            Provide your response in this clean format:
-            OBJECTION TYPE: [e.g. Budget Constraint / Timing & Prioritization / Proof & Trust / Scope & Technical]
-            
+            Analyze the thread and output:
+            <Analysis>...</Analysis>
+            <Reasoning>...</Reasoning>
+            <Next Best Action>...</Next Best Action>
+            OBJECTION TYPE: [e.g. Budget Constraint / Timing / Trust & Proof / In-House / Scope]
             DRAFT REPLY:
-            [Your full, ready-to-send email body]
+            [Full email response]
         """.trimIndent()
 
         val fallbackDraft = """
@@ -77,19 +96,22 @@ class AiCloserService(
             
             Thank you for getting back to me regarding "$subject".
             
-            I completely understand your perspective and respect your position. Most of our top clients initially had the exact same hesitation before we uncovered their high-impact organic keyword opportunities.
+            I completely understand your perspective and respect your position. Most of our partners initially had the exact same hesitation before we uncovered their high-impact organic keyword opportunities.
             
             Even with conservative projections, fixing the technical indexation and speed bottlenecks will recover far more revenue each month than the one-time investment.
             
-            Let's start with a streamlined audit phase so you see tangible ranking improvements before committing to the full package.
+            ${if (bookingLinkUrl.isNotBlank()) "Let's hop on a brief 10-minute call to review the quick wins: $bookingLinkUrl" else "Let's start with a streamlined audit phase so you see tangible ranking improvements before committing to the full package."}
             
             Best regards,
-            AutoFreelancer Agency Director
+            $agencyName Team
         """.trimIndent()
 
         var drafted = fallbackDraft
         var category = "Budget Objection"
         var provider = "Autonomous Template Closer"
+        var analysis = "Client expressed standard commercial hesitation regarding timeline or upfront cost."
+        var reasoning = "Acknowledge constraint, reframe into monthly organic traffic loss, offer low-commitment entry point."
+        var nextAction = if (bookingLinkUrl.isNotBlank()) "Direct prospect to 10-min calendar intro ($bookingLinkUrl)" else "Offer 3-point micro-audit summary"
 
         if (geminiApiKey.isNotBlank() || openRouterApiKey.isNotBlank()) {
             val aiRes = aiService.generateContentWithFallback(
@@ -99,7 +121,7 @@ class AiCloserService(
                 openRouterModel = openRouterModel,
                 systemPrompt = systemPrompt,
                 userPrompt = userPrompt,
-                maxTokens = 850,
+                maxTokens = 1200,
                 temperature = 0.5
             )
 
@@ -113,23 +135,41 @@ class AiCloserService(
                     )
                 }
 
+                // Extract Reasoning Mode tags
+                val analysisRegex = Regex("<Analysis>([\\s\\S]*?)</Analysis>", RegexOption.IGNORE_CASE)
+                val reasoningRegex = Regex("<Reasoning>([\\s\\S]*?)</Reasoning>", RegexOption.IGNORE_CASE)
+                val nextActionRegex = Regex("<Next Best Action>([\\s\\S]*?)</Next Best Action>", RegexOption.IGNORE_CASE)
+
+                analysisRegex.find(content)?.groupValues?.getOrNull(1)?.trim()?.let {
+                    if (it.isNotBlank()) analysis = it
+                }
+                reasoningRegex.find(content)?.groupValues?.getOrNull(1)?.trim()?.let {
+                    if (it.isNotBlank()) reasoning = it
+                }
+                nextActionRegex.find(content)?.groupValues?.getOrNull(1)?.trim()?.let {
+                    if (it.isNotBlank()) nextAction = it
+                }
+
                 // Parse category and draft
                 if (content.contains("DRAFT REPLY:", ignoreCase = true)) {
                     val parts = content.split(Regex("DRAFT REPLY:", RegexOption.IGNORE_CASE))
                     val headerPart = parts[0]
                     val generatedDraft = parts.getOrNull(1)?.trim().orEmpty()
-                    if (generatedDraft.isBlank() || generatedDraft.equals("null", ignoreCase = true)) {
-                        return@withContext Result.failure(
-                            IllegalStateException("AI returned an empty reply. Your existing draft was kept unchanged.")
-                        )
+                    if (generatedDraft.isNotBlank()) {
+                        drafted = generatedDraft
                     }
-                    drafted = generatedDraft
 
                     if (headerPart.contains("OBJECTION TYPE:", ignoreCase = true)) {
                         category = headerPart.substringAfter("OBJECTION TYPE:").trim().lines().firstOrNull() ?: "General Objection"
                     }
                 } else {
+                    // Clean out reasoning tags if the AI didn't use DRAFT REPLY delimiter
                     drafted = content
+                        .replace(analysisRegex, "")
+                        .replace(reasoningRegex, "")
+                        .replace(nextActionRegex, "")
+                        .replace(Regex("OBJECTION TYPE:.*"), "")
+                        .trim()
                     category = detectObjectionCategory(incomingMessage)
                 }
             } else {
@@ -137,7 +177,7 @@ class AiCloserService(
                 Log.w(tag, "AI Closer generation failed: ${error?.message}")
                 return@withContext Result.failure(
                     IllegalStateException(
-                        "AI reply generation failed. Your existing draft was kept unchanged: ${error?.message ?: "Unknown AI error"}",
+                        "AI reply generation failed: ${error?.message ?: "Unknown AI error"}",
                         error
                     )
                 )
@@ -147,14 +187,17 @@ class AiCloserService(
         }
 
         if (paymentLinkUrl.isNotBlank() && !drafted.contains(paymentLinkUrl)) {
-            drafted += "\n\nTo lock in your priority audit slot today, you can complete the onboarding here: ${paymentLinkUrl.trim()}"
+            drafted += "\n\nTo lock in your priority audit slot today, you can complete onboarding here: ${paymentLinkUrl.trim()}"
         }
 
         Result.success(
             ObjectionHandlingResult(
                 objectionCategory = category,
                 draftedReply = drafted,
-                providerUsed = provider
+                providerUsed = provider,
+                reasoningAnalysis = analysis,
+                reasoningStrategy = reasoning,
+                nextBestAction = nextAction
             )
         )
     }

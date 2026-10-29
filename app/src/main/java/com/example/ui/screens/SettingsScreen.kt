@@ -22,9 +22,12 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AccountBox
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Hub
@@ -133,6 +136,15 @@ fun SettingsScreen(
     var elevenLabsApiKey by remember { mutableStateOf(currentSettings.elevenLabsApiKey) }
     var elevenLabsVoiceId by remember { mutableStateOf(currentSettings.elevenLabsVoiceId) }
     var inboundEmailWebhookUrl by remember { mutableStateOf(currentSettings.inboundEmailWebhookUrl) }
+    var bookingLinkUrl by remember { mutableStateOf(currentSettings.bookingLinkUrl) }
+    var agencyName by remember { mutableStateOf(currentSettings.agencyName) }
+    var agencyLogoUrl by remember { mutableStateOf(currentSettings.agencyLogoUrl) }
+    var customEmailFooter by remember { mutableStateOf(currentSettings.customEmailFooter) }
+    var twilioAccountSid by remember { mutableStateOf(currentSettings.twilioAccountSid) }
+    var twilioAuthToken by remember { mutableStateOf(currentSettings.twilioAuthToken) }
+    var twilioPhoneNumber by remember { mutableStateOf(currentSettings.twilioPhoneNumber) }
+    var showTwilioAuthToken by remember { mutableStateOf(false) }
+    var isSyncingOfflineQueue by remember { mutableStateOf(false) }
 
     // Yeh fix hai: Jab bhi cloud se data aayega, yeh saare boxes ko update kar dega
     LaunchedEffect(currentSettings) {
@@ -150,6 +162,13 @@ fun SettingsScreen(
         elevenLabsApiKey = currentSettings.elevenLabsApiKey
         elevenLabsVoiceId = currentSettings.elevenLabsVoiceId
         inboundEmailWebhookUrl = currentSettings.inboundEmailWebhookUrl
+        bookingLinkUrl = currentSettings.bookingLinkUrl
+        agencyName = currentSettings.agencyName
+        agencyLogoUrl = currentSettings.agencyLogoUrl
+        customEmailFooter = currentSettings.customEmailFooter
+        twilioAccountSid = currentSettings.twilioAccountSid
+        twilioAuthToken = currentSettings.twilioAuthToken
+        twilioPhoneNumber = currentSettings.twilioPhoneNumber
     }
 
     // Dropdown toggles
@@ -462,6 +481,141 @@ fun SettingsScreen(
                             )
                         }
                     }
+                }
+            }
+
+            // ==========================================
+            // Calendar Booking Link (Calendly)
+            // ==========================================
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(CyberPrimary.copy(alpha = 0.2f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.DateRange,
+                                contentDescription = null,
+                                tint = CyberPrimary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Column {
+                            Text(
+                                text = "Calendar Booking Link URL",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Calendly / Cal.com Strategy Call Scheduler",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = CyberPrimary
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = "When configured, outreach proposals and follow-up sequences automatically invite prospects to book a discovery call using this link.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    OutlinedTextField(
+                        value = bookingLinkUrl,
+                        onValueChange = { bookingLinkUrl = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("booking_link_input"),
+                        label = { Text("Booking Link URL (e.g. https://calendly.com/your-agency/15min)") },
+                        placeholder = { Text("https://calendly.com/apex-growth/strategy") },
+                        singleLine = true
+                    )
+                }
+            }
+
+            // ==========================================
+            // White-Label Agency Settings
+            // ==========================================
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(CyberTertiary.copy(alpha = 0.2f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AccountBox,
+                                contentDescription = null,
+                                tint = CyberTertiary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Column {
+                            Text(
+                                text = "White-Label Agency Branding",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Custom SaaS Brand & Email Sign-Off",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = CyberTertiary
+                            )
+                        }
+                    }
+
+                    OutlinedTextField(
+                        value = agencyName,
+                        onValueChange = { agencyName = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("agency_name_input"),
+                        label = { Text("Agency Name") },
+                        placeholder = { Text("Apex Growth Agency") },
+                        singleLine = true
+                    )
+
+                    OutlinedTextField(
+                        value = customEmailFooter,
+                        onValueChange = { customEmailFooter = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("custom_email_footer_input"),
+                        label = { Text("Custom Email Footer & Sign-Off") },
+                        placeholder = { Text("Apex Growth Solutions • Confidential Client Deliverables") },
+                        minLines = 2
+                    )
                 }
             }
 
@@ -1569,6 +1723,174 @@ fun SettingsScreen(
             }
 
             // ==========================================
+            // Twilio Multi-Channel SMS & WhatsApp
+            // ==========================================
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(CyberSecondary.copy(alpha = 0.2f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Call,
+                                contentDescription = null,
+                                tint = CyberSecondary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Column {
+                            Text(
+                                text = "Twilio SMS & WhatsApp Outreach",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Multi-Channel Fallback for Cold Leads",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = CyberSecondary
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = "Used when prospects do not open or reply to initial email pitches. Gracefully falls back to real-time sandbox simulation when unconfigured.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    OutlinedTextField(
+                        value = twilioAccountSid,
+                        onValueChange = { twilioAccountSid = it },
+                        modifier = Modifier.fillMaxWidth().testTag("twilio_account_sid_input"),
+                        label = { Text("Twilio Account SID") },
+                        placeholder = { Text("AC...") },
+                        singleLine = true
+                    )
+
+                    OutlinedTextField(
+                        value = twilioAuthToken,
+                        onValueChange = { twilioAuthToken = it },
+                        modifier = Modifier.fillMaxWidth().testTag("twilio_auth_token_input"),
+                        label = { Text("Twilio Auth Token") },
+                        placeholder = { Text("auth_token_...") },
+                        visualTransformation = if (showTwilioAuthToken) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { showTwilioAuthToken = !showTwilioAuthToken }) {
+                                Icon(
+                                    imageVector = if (showTwilioAuthToken) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                    contentDescription = "Toggle token visibility"
+                                )
+                            }
+                        },
+                        singleLine = true
+                    )
+
+                    OutlinedTextField(
+                        value = twilioPhoneNumber,
+                        onValueChange = { twilioPhoneNumber = it },
+                        modifier = Modifier.fillMaxWidth().testTag("twilio_phone_number_input"),
+                        label = { Text("Twilio Outbound Phone Number") },
+                        placeholder = { Text("+15551234567") },
+                        singleLine = true
+                    )
+                }
+            }
+
+            // ==========================================
+            // Offline Action Queue & Firestore Sync
+            // ==========================================
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(CyberSuccess.copy(alpha = 0.2f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Security,
+                                contentDescription = null,
+                                tint = CyberSuccess,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Column {
+                            Text(
+                                text = "Offline Resilience & Sync Queue",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Local Journaling with Cloud Auto-Flush",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = CyberSuccess
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = "All lead approvals, proposal generations, and CRM stage moves are stored in a durable local queue when network is intermittent, and automatically flushed to Firestore upon reconnection.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    OutlinedButton(
+                        onClick = {
+                            isSyncingOfflineQueue = true
+                            viewModel.syncOfflineQueue { success, count, msg ->
+                                isSyncingOfflineQueue = false
+                                scope.launch {
+                                    snackbarHostState.showSnackbar(msg)
+                                }
+                            }
+                        },
+                        enabled = !isSyncingOfflineQueue,
+                        modifier = Modifier.fillMaxWidth().testTag("sync_offline_queue_button")
+                    ) {
+                        if (isSyncingOfflineQueue) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Syncing to Firestore...")
+                        } else {
+                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Flush Offline Queue to Firestore Now")
+                        }
+                    }
+                }
+            }
+
+            // ==========================================
             // Save Settings Button
             // ==========================================
             Button(
@@ -1587,7 +1909,14 @@ fun SettingsScreen(
                         autoRunOnApproval = autoRunOnApproval,
                         elevenLabsApiKey = elevenLabsApiKey.trim(),
                         elevenLabsVoiceId = elevenLabsVoiceId.trim(),
-                        inboundEmailWebhookUrl = inboundEmailWebhookUrl.trim()
+                        inboundEmailWebhookUrl = inboundEmailWebhookUrl.trim(),
+                        bookingLinkUrl = bookingLinkUrl.trim(),
+                        agencyName = agencyName.trim(),
+                        agencyLogoUrl = agencyLogoUrl.trim(),
+                        customEmailFooter = customEmailFooter.trim(),
+                        twilioAccountSid = twilioAccountSid.trim(),
+                        twilioAuthToken = twilioAuthToken.trim(),
+                        twilioPhoneNumber = twilioPhoneNumber.trim()
                     )
                     viewModel.saveSettings(updated, context) { success, message ->
                         scope.launch {

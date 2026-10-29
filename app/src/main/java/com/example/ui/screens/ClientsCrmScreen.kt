@@ -6,16 +6,11 @@ import android.content.Context
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -31,7 +26,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -39,7 +33,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Business
-import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Description
@@ -48,9 +42,13 @@ import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.OpenInBrowser
+import androidx.compose.material.icons.filled.Payment
 import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Sms
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -93,12 +91,15 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.CrmClient
+import com.example.data.model.DealPipelineStage
+import com.example.data.service.FollowUpSequenceEngine
 import com.example.ui.theme.CyberError
 import com.example.ui.theme.CyberPrimary
 import com.example.ui.theme.CyberPrimaryLight
 import com.example.ui.theme.CyberSecondary
 import com.example.ui.theme.CyberSuccess
 import com.example.ui.theme.CyberTertiary
+import com.example.ui.theme.CyberWarning
 import com.example.ui.viewmodel.DashboardViewModel
 import kotlinx.coroutines.launch
 
@@ -118,17 +119,22 @@ fun ClientsCrmScreen(
 
     val clients by viewModel.clients.collectAsState()
     var searchQuery by remember { mutableStateOf("") }
-    var statusFilter by remember { mutableStateOf("ALL") } // ALL, Pitched, Paid, Completed
+    var selectedStageFilter by remember { mutableStateOf("ALL") }
 
     var showAddDialog by remember { mutableStateOf(false) }
     var selectedClientForEmail by remember { mutableStateOf<CrmClient?>(null) }
+    var selectedClientForProposal by remember { mutableStateOf<CrmClient?>(null) }
+    var selectedClientForPayment by remember { mutableStateOf<CrmClient?>(null) }
+    var selectedClientForTwilio by remember { mutableStateOf<CrmClient?>(null) }
+
+    // Email dispatch state
     var emailSubject by remember { mutableStateOf("") }
     var emailBody by remember { mutableStateOf("") }
     var recipientEmail by remember { mutableStateOf("") }
     var isSendingEmail by remember { mutableStateOf(false) }
 
-    // Client filtering
-    val filteredClients = remember(clients, searchQuery, statusFilter) {
+    // Client filtering across 8 stages
+    val filteredClients = remember(clients, searchQuery, selectedStageFilter) {
         clients.filter { client ->
             val matchesSearch = searchQuery.isBlank() ||
                 client.name.contains(searchQuery, ignoreCase = true) ||
@@ -136,21 +142,21 @@ fun ClientsCrmScreen(
                 client.email.contains(searchQuery, ignoreCase = true) ||
                 client.websiteUrl.contains(searchQuery, ignoreCase = true)
 
-            val matchesStatus = when (statusFilter) {
-                "Pitched" -> client.status.equals("Pitched", ignoreCase = true)
-                "Paid" -> client.status.equals("Paid", ignoreCase = true)
-                "Completed" -> client.status.equals("Completed", ignoreCase = true)
-                else -> true
+            val clientNormalizedStage = DealPipelineStage.normalize(client.pipelineStage)
+            val matchesStage = when (selectedStageFilter) {
+                "ALL" -> true
+                else -> clientNormalizedStage.equals(selectedStageFilter, ignoreCase = true)
             }
 
-            matchesSearch && matchesStatus
+            matchesSearch && matchesStage
         }
     }
 
-    // Counts for CRM summary
-    val pitchedCount = clients.count { it.status.equals("Pitched", ignoreCase = true) }
-    val paidCount = clients.count { it.status.equals("Paid", ignoreCase = true) }
-    val completedCount = clients.count { it.status.equals("Completed", ignoreCase = true) }
+    // Pipeline counts
+    val pitchedCount = clients.count { DealPipelineStage.normalize(it.pipelineStage) == DealPipelineStage.PITCHED }
+    val followUpCount = clients.count { DealPipelineStage.normalize(it.pipelineStage) == DealPipelineStage.FOLLOW_UP }
+    val interestedCount = clients.count { DealPipelineStage.normalize(it.pipelineStage) == DealPipelineStage.INTERESTED }
+    val wonCount = clients.count { DealPipelineStage.normalize(it.pipelineStage) == DealPipelineStage.WON }
 
     Scaffold(
         topBar = {
@@ -173,11 +179,11 @@ fun ClientsCrmScreen(
                 title = {
                     Column {
                         Text(
-                            text = "Client CRM Database",
+                            text = "Deal Pipeline CRM",
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                         )
                         Text(
-                            text = "${clients.size} total leads synced with Firebase Firestore",
+                            text = "${clients.size} deals in pipeline • 8 stages active",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -235,15 +241,16 @@ fun ClientsCrmScreen(
                             .padding(14.dp),
                         horizontalArrangement = Arrangement.SpaceAround
                     ) {
-                        CrmMetricItem(label = "Total Leads", count = clients.size, color = CyberPrimary)
+                        CrmMetricItem(label = "Total Deals", count = clients.size, color = CyberPrimary)
                         CrmMetricItem(label = "Pitched", count = pitchedCount, color = CyberSecondary)
-                        CrmMetricItem(label = "Paid", count = paidCount, color = CyberSuccess)
-                        CrmMetricItem(label = "Completed", count = completedCount, color = CyberTertiary)
+                        CrmMetricItem(label = "Follow-Ups", count = followUpCount, color = CyberWarning)
+                        CrmMetricItem(label = "Interested", count = interestedCount, color = CyberPrimaryLight)
+                        CrmMetricItem(label = "Closed / Won", count = wonCount, color = CyberSuccess)
                     }
                 }
             }
 
-            // Search and Status Filters
+            // Search and 8-Stage Pipeline Filters
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedTextField(
@@ -252,7 +259,7 @@ fun ClientsCrmScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("crm_search_input"),
-                        placeholder = { Text("Search clients by name, company, email...") },
+                        placeholder = { Text("Search clients by name, company, email, site...") },
                         leadingIcon = {
                             Icon(Icons.Default.Search, contentDescription = "Search Leads")
                         },
@@ -260,50 +267,35 @@ fun ClientsCrmScreen(
                         shape = RoundedCornerShape(12.dp)
                     )
 
+                    // 8-Stage Horizontal Pipeline Filter Chips
                     FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         FilterChip(
-                            selected = statusFilter == "ALL",
-                            onClick = { statusFilter = "ALL" },
-                            label = { Text("All (${clients.size})") },
-                            modifier = Modifier.testTag("client_status_filter_all"),
+                            selected = selectedStageFilter == "ALL",
+                            onClick = { selectedStageFilter = "ALL" },
+                            label = { Text("All (${clients.size})", fontSize = 11.sp) },
+                            modifier = Modifier.testTag("client_stage_filter_all"),
                             colors = FilterChipDefaults.filterChipColors(
                                 selectedContainerColor = CyberPrimary.copy(alpha = 0.2f),
                                 selectedLabelColor = CyberPrimary
                             )
                         )
-                        FilterChip(
-                            selected = statusFilter == "Pitched",
-                            onClick = { statusFilter = "Pitched" },
-                            label = { Text("Pitched ($pitchedCount)") },
-                            modifier = Modifier.testTag("client_status_filter_pitched"),
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = CyberSecondary.copy(alpha = 0.2f),
-                                selectedLabelColor = CyberSecondary
+                        DealPipelineStage.ALL.forEach { stage ->
+                            val stageCount = clients.count { DealPipelineStage.normalize(it.pipelineStage) == stage }
+                            FilterChip(
+                                selected = selectedStageFilter == stage,
+                                onClick = { selectedStageFilter = stage },
+                                label = { Text("$stage ($stageCount)", fontSize = 11.sp) },
+                                modifier = Modifier.testTag("client_stage_filter_${stage.lowercase()}"),
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = stageColor(stage).copy(alpha = 0.2f),
+                                    selectedLabelColor = stageColor(stage)
+                                )
                             )
-                        )
-                        FilterChip(
-                            selected = statusFilter == "Paid",
-                            onClick = { statusFilter = "Paid" },
-                            label = { Text("Paid ($paidCount)") },
-                            modifier = Modifier.testTag("client_status_filter_paid"),
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = CyberSuccess.copy(alpha = 0.2f),
-                                selectedLabelColor = CyberSuccess
-                            )
-                        )
-                        FilterChip(
-                            selected = statusFilter == "Completed",
-                            onClick = { statusFilter = "Completed" },
-                            label = { Text("Completed ($completedCount)") },
-                            modifier = Modifier.testTag("client_status_filter_completed"),
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = CyberTertiary.copy(alpha = 0.2f),
-                                selectedLabelColor = CyberTertiary
-                            )
-                        )
+                        }
                     }
                 }
             }
@@ -328,15 +320,15 @@ fun ClientsCrmScreen(
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                             )
                             Text(
-                                text = if (searchQuery.isNotBlank() || statusFilter != "ALL")
-                                    "No clients match the current filter."
+                                text = if (searchQuery.isNotBlank() || selectedStageFilter != "ALL")
+                                    "No clients match the current stage filter."
                                 else
-                                    "No client leads in CRM yet.",
+                                    "No client leads in pipeline yet.",
                                 style = MaterialTheme.typography.bodyLarge,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Text(
-                                text = "Run Lead Scout on Tasks screen or add a client manually.",
+                                text = "Run Apollo-Scout on Tasks screen or add a prospect manually.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
                             )
@@ -346,20 +338,23 @@ fun ClientsCrmScreen(
                             ) {
                                 Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Add First Client")
+                                Text("Add First Lead")
                             }
                         }
                     }
                 }
             } else {
                 items(filteredClients, key = { it.id }) { client ->
-                    ClientCardItem(
+                    ClientPipelineCard(
                         client = client,
-                        onStatusChange = { newStatus ->
-                            viewModel.updateClientStatus(client.id, newStatus)
+                        onStageChange = { newStage ->
+                            viewModel.updateClientPipelineStage(client.id, newStage)
                             scope.launch {
-                                snackbarHostState.showSnackbar("Client status updated to $newStatus")
+                                snackbarHostState.showSnackbar("Moved ${client.name} to $newStage")
                             }
+                        },
+                        onGenerateProposalClicked = {
+                            selectedClientForProposal = client
                         },
                         onGenerateReport = {
                             viewModel.generateSeoReportForClient(client) { success, result, msg ->
@@ -368,16 +363,32 @@ fun ClientsCrmScreen(
                                 }
                             }
                         },
+                        onRequestPaymentClicked = {
+                            selectedClientForPayment = client
+                        },
+                        onSendTwilioClicked = {
+                            selectedClientForTwilio = client
+                        },
+                        onOpenPortalClicked = {
+                            viewModel.openClientPortal(client)
+                        },
                         onSendEmailClicked = {
                             selectedClientForEmail = client
                             recipientEmail = client.email
                             emailSubject = "SEO Audit & Growth Deliverable for ${client.name}"
                             emailBody = if (client.seoReport.isNotBlank()) client.seoReport else client.pitchMessage
                         },
-                        onCopyReport = { report ->
+                        onTriggerSequence = { stage ->
+                            viewModel.sendFollowUpSequenceNow(client, stage) { success, msg ->
+                                scope.launch {
+                                    snackbarHostState.showSnackbar(msg)
+                                }
+                            }
+                        },
+                        onCopyContent = { text, label ->
                             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            clipboard.setPrimaryClip(ClipData.newPlainText("SEO Audit Report", report))
-                            Toast.makeText(context, "SEO Audit Report copied to clipboard", Toast.LENGTH_SHORT).show()
+                            clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
+                            Toast.makeText(context, "$label copied to clipboard", Toast.LENGTH_SHORT).show()
                         }
                     )
                 }
@@ -385,17 +396,18 @@ fun ClientsCrmScreen(
         }
     }
 
-    // Dialog: Add Manual Client
+    // Dialog: Add Manual Prospect
     if (showAddDialog) {
         var clientName by remember { mutableStateOf("") }
         var clientCompany by remember { mutableStateOf("") }
         var clientWebsite by remember { mutableStateOf("") }
         var clientEmail by remember { mutableStateOf("") }
-        var clientStatus by remember { mutableStateOf("Pitched") }
+        var clientPhone by remember { mutableStateOf("") }
+        var clientStage by remember { mutableStateOf(DealPipelineStage.NEW) }
 
         AlertDialog(
             onDismissRequest = { showAddDialog = false },
-            title = { Text("Add Client to CRM") },
+            title = { Text("Add Prospect to Pipeline") },
             text = {
                 Column(
                     modifier = Modifier
@@ -406,54 +418,46 @@ fun ClientsCrmScreen(
                     OutlinedTextField(
                         value = clientName,
                         onValueChange = { clientName = it },
-                        label = { Text("Client Name / Contact") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("crm_add_name_input"),
+                        label = { Text("Contact Name") },
+                        modifier = Modifier.fillMaxWidth().testTag("crm_add_name_input"),
                         singleLine = true
                     )
                     OutlinedTextField(
                         value = clientCompany,
                         onValueChange = { clientCompany = it },
-                        label = { Text("Company / Brand") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("crm_add_company_input"),
+                        label = { Text("Company / Business") },
+                        modifier = Modifier.fillMaxWidth().testTag("crm_add_company_input"),
                         singleLine = true
                     )
                     OutlinedTextField(
                         value = clientWebsite,
                         onValueChange = { clientWebsite = it },
-                        label = { Text("Website URL (e.g. https://target.com)") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("crm_add_website_input"),
+                        label = { Text("Website URL (e.g. https://domain.com)") },
+                        modifier = Modifier.fillMaxWidth().testTag("crm_add_website_input"),
                         singleLine = true
                     )
                     OutlinedTextField(
                         value = clientEmail,
                         onValueChange = { clientEmail = it },
                         label = { Text("Client Email") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("crm_add_email_input"),
+                        modifier = Modifier.fillMaxWidth().testTag("crm_add_email_input"),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = clientPhone,
+                        onValueChange = { clientPhone = it },
+                        label = { Text("Phone / WhatsApp (e.g. +1234567890)") },
+                        modifier = Modifier.fillMaxWidth().testTag("crm_add_phone_input"),
                         singleLine = true
                     )
 
-                    Text(
-                        text = "Initial Status:",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        listOf("Pitched", "Paid", "Completed").forEach { status ->
+                    Text(text = "Initial Pipeline Stage:", style = MaterialTheme.typography.labelMedium)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                        listOf(DealPipelineStage.NEW, DealPipelineStage.PITCHED, DealPipelineStage.INTERESTED).forEach { stage ->
                             FilterChip(
-                                selected = clientStatus == status,
-                                onClick = { clientStatus = status },
-                                label = { Text(status) }
+                                selected = clientStage == stage,
+                                onClick = { clientStage = stage },
+                                label = { Text(stage, fontSize = 11.sp) }
                             )
                         }
                     }
@@ -468,23 +472,210 @@ fun ClientsCrmScreen(
                                 company = clientCompany,
                                 websiteUrl = clientWebsite,
                                 email = clientEmail.trim(),
-                                status = clientStatus,
+                                phone = clientPhone.trim(),
+                                status = clientStage,
+                                pipelineStage = clientStage,
                                 leadSource = "Direct Manual Lead"
                             )
                             viewModel.upsertClient(newClient)
                             showAddDialog = false
                             scope.launch {
-                                snackbarHostState.showSnackbar("Client added to CRM & Firestore")
+                                snackbarHostState.showSnackbar("Prospect added to Pipeline CRM")
                             }
                         }
                     },
                     modifier = Modifier.testTag("crm_submit_add_client")
                 ) {
-                    Text("Save Client")
+                    Text("Save Prospect")
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showAddDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // Dialog: Generate Formal Proposal & Quote
+    selectedClientForProposal?.let { client ->
+        var quoteAmountText by remember { mutableStateOf(if (client.proposalPrice > 0) client.proposalPrice.toString() else "850") }
+        var isGeneratingProposal by remember { mutableStateOf(false) }
+
+        AlertDialog(
+            onDismissRequest = { selectedClientForProposal = null },
+            title = { Text("Generate Proposal & Quote") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "The AI Architect will synthesize a formal growth proposal deliverable for ${client.name} (${client.company.ifBlank { client.websiteUrl }}).",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    OutlinedTextField(
+                        value = quoteAmountText,
+                        onValueChange = { quoteAmountText = it.filter { char -> char.isDigit() } },
+                        label = { Text("Quoted Investment ($ USD)") },
+                        modifier = Modifier.fillMaxWidth().testTag("proposal_quote_amount_input"),
+                        singleLine = true
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val amount = quoteAmountText.toIntOrNull() ?: 850
+                        isGeneratingProposal = true
+                        viewModel.generateClientProposalDeliverable(client, amount) { success, proposal, msg ->
+                            isGeneratingProposal = false
+                            selectedClientForProposal = null
+                            scope.launch {
+                                snackbarHostState.showSnackbar(msg)
+                            }
+                        }
+                    },
+                    enabled = !isGeneratingProposal,
+                    modifier = Modifier.testTag("confirm_generate_proposal_button")
+                ) {
+                    if (isGeneratingProposal) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Synthesizing...")
+                    } else {
+                        Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Generate Proposal")
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { selectedClientForProposal = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // Dialog: Request Payment
+    selectedClientForPayment?.let { client ->
+        var paymentAmountText by remember { mutableStateOf(if (client.proposalPrice > 0) client.proposalPrice.toString() else "500") }
+        var isRequesting by remember { mutableStateOf(false) }
+
+        AlertDialog(
+            onDismissRequest = { selectedClientForPayment = null },
+            title = { Text("Request Client Payment") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "Send an invoice and secure Stripe/Gumroad checkout link to ${client.email}.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    OutlinedTextField(
+                        value = paymentAmountText,
+                        onValueChange = { paymentAmountText = it.filter { char -> char.isDigit() } },
+                        label = { Text("Invoice Amount ($ USD)") },
+                        modifier = Modifier.fillMaxWidth().testTag("payment_request_amount_input"),
+                        singleLine = true
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val amount = paymentAmountText.toIntOrNull() ?: 500
+                        isRequesting = true
+                        viewModel.requestPaymentFromClient(client, amount) { success, msg ->
+                            isRequesting = false
+                            selectedClientForPayment = null
+                            scope.launch {
+                                snackbarHostState.showSnackbar(msg)
+                            }
+                        }
+                    },
+                    enabled = !isRequesting,
+                    colors = ButtonDefaults.buttonColors(containerColor = CyberSuccess),
+                    modifier = Modifier.testTag("confirm_request_payment_button")
+                ) {
+                    if (isRequesting) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White)
+                    } else {
+                        Icon(Icons.Default.Payment, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Send Payment Request")
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { selectedClientForPayment = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // Dialog: Twilio WhatsApp / SMS Outreach
+    selectedClientForTwilio?.let { client ->
+        var messageText by remember {
+            mutableStateOf("Hi ${client.name}, quick follow-up from our team regarding your website speed and organic traffic audit.")
+        }
+        var isWhatsApp by remember { mutableStateOf(false) }
+        var isSendingTwilio by remember { mutableStateOf(false) }
+
+        AlertDialog(
+            onDismissRequest = { selectedClientForTwilio = null },
+            title = { Text("Multi-Channel Outreach (Twilio)") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "Send an SMS or WhatsApp message when email outreach has been ignored.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = !isWhatsApp,
+                            onClick = { isWhatsApp = false },
+                            label = { Text("SMS Text") }
+                        )
+                        FilterChip(
+                            selected = isWhatsApp,
+                            onClick = { isWhatsApp = true },
+                            label = { Text("WhatsApp") }
+                        )
+                    }
+                    OutlinedTextField(
+                        value = messageText,
+                        onValueChange = { messageText = it },
+                        label = { Text("Message Body") },
+                        modifier = Modifier.fillMaxWidth().height(120.dp).testTag("twilio_message_input"),
+                        maxLines = 5
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        isSendingTwilio = true
+                        viewModel.sendTwilioMessage(client, messageText, isWhatsApp) { success, msg ->
+                            isSendingTwilio = false
+                            selectedClientForTwilio = null
+                            scope.launch {
+                                snackbarHostState.showSnackbar(msg)
+                            }
+                        }
+                    },
+                    enabled = !isSendingTwilio,
+                    modifier = Modifier.testTag("confirm_send_twilio_button")
+                ) {
+                    if (isSendingTwilio) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White)
+                    } else {
+                        Icon(Icons.Default.Sms, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Send via Twilio")
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { selectedClientForTwilio = null }) {
                     Text("Cancel")
                 }
             }
@@ -498,18 +689,14 @@ fun ClientsCrmScreen(
             title = { Text("Send Email via Brevo") },
             text = {
                 Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .verticalScroll(rememberScrollState()),
+                    modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     OutlinedTextField(
                         value = recipientEmail,
                         onValueChange = { recipientEmail = it },
                         label = { Text("Recipient Email") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("crm_email_recipient_input"),
+                        modifier = Modifier.fillMaxWidth().testTag("crm_email_recipient_input"),
                         singleLine = true
                     )
                     OutlinedTextField(
@@ -523,9 +710,7 @@ fun ClientsCrmScreen(
                         value = emailBody,
                         onValueChange = { emailBody = it },
                         label = { Text("Proposal / Deliverable Content") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(180.dp),
+                        modifier = Modifier.fillMaxWidth().height(180.dp),
                         maxLines = 8
                     )
                 }
@@ -562,7 +747,7 @@ fun ClientsCrmScreen(
                     } else {
                         Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                         Text("Send via Brevo")
+                        Text("Send via Brevo")
                     }
                 }
             },
@@ -595,33 +780,49 @@ private fun CrmMetricItem(
     }
 }
 
+private fun stageColor(stage: String): Color {
+    return when (DealPipelineStage.normalize(stage)) {
+        DealPipelineStage.NEW -> CyberPrimary
+        DealPipelineStage.PITCHED -> CyberSecondary
+        DealPipelineStage.FOLLOW_UP -> CyberWarning
+        DealPipelineStage.INTERESTED -> CyberPrimaryLight
+        DealPipelineStage.CALL_BOOKED -> CyberTertiary
+        DealPipelineStage.PROPOSAL_SENT -> CyberSecondary
+        DealPipelineStage.WON -> CyberSuccess
+        DealPipelineStage.LOST -> CyberError
+        else -> CyberPrimary
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ClientCardItem(
+private fun ClientPipelineCard(
     client: CrmClient,
-    onStatusChange: (String) -> Unit,
+    onStageChange: (String) -> Unit,
+    onGenerateProposalClicked: () -> Unit,
     onGenerateReport: () -> Unit,
+    onRequestPaymentClicked: () -> Unit,
+    onSendTwilioClicked: () -> Unit,
+    onOpenPortalClicked: () -> Unit,
     onSendEmailClicked: () -> Unit,
-    onCopyReport: (String) -> Unit
+    onTriggerSequence: (FollowUpSequenceEngine.FollowUpStage) -> Unit,
+    onCopyContent: (String, String) -> Unit
 ) {
-    var statusDropdownOpen by remember { mutableStateOf(false) }
+    var stageDropdownOpen by remember { mutableStateOf(false) }
+    var sequenceMenuOpen by remember { mutableStateOf(false) }
     var expandedPitch by remember { mutableStateOf(false) }
+    var expandedProposal by remember { mutableStateOf(false) }
     var expandedReport by remember { mutableStateOf(false) }
 
-    val statusColor = when (client.status.lowercase()) {
-        "paid" -> CyberSuccess
-        "completed" -> CyberTertiary
-        else -> CyberSecondary
-    }
+    val normalizedStage = DealPipelineStage.normalize(client.pipelineStage)
+    val color = stageColor(normalizedStage)
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .testTag("client_card_${client.id}"),
         shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface
-        ),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(
@@ -630,7 +831,7 @@ private fun ClientCardItem(
                 .padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            // Header Row: Name & Status Badge with Dropdown
+            // Header Row: Name & Interactive Stage Badge
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -648,17 +849,8 @@ private fun ClientCardItem(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            Icon(
-                                Icons.Default.Business,
-                                contentDescription = null,
-                                modifier = Modifier.size(12.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                text = client.company,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            Icon(Icons.Default.Business, contentDescription = null, modifier = Modifier.size(12.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(text = client.company, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }
@@ -667,9 +859,9 @@ private fun ClientCardItem(
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(8.dp))
-                            .background(statusColor.copy(alpha = 0.15f))
-                            .border(1.dp, statusColor.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
-                            .clickable { statusDropdownOpen = true }
+                            .background(color.copy(alpha = 0.15f))
+                            .border(1.dp, color.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
+                            .clickable { stageDropdownOpen = true }
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                             .testTag("client_status_chip"),
                         contentAlignment = Alignment.Center
@@ -679,131 +871,233 @@ private fun ClientCardItem(
                             horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             Text(
-                                text = client.status,
+                                text = normalizedStage,
                                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                color = statusColor
+                                color = color
                             )
-                            Icon(
-                                Icons.Default.MoreVert,
-                                contentDescription = "Change Status",
-                                modifier = Modifier.size(14.dp),
-                                tint = statusColor
-                            )
+                            Icon(Icons.Default.MoreVert, contentDescription = "Move Stage", modifier = Modifier.size(14.dp), tint = color)
                         }
                     }
 
                     DropdownMenu(
-                        expanded = statusDropdownOpen,
-                        onDismissRequest = { statusDropdownOpen = false }
+                        expanded = stageDropdownOpen,
+                        onDismissRequest = { stageDropdownOpen = false }
                     ) {
-                        DropdownMenuItem(
-                            text = { Text("Pitched") },
-                            onClick = {
-                                onStatusChange("Pitched")
-                                statusDropdownOpen = false
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Paid") },
-                            onClick = {
-                                onStatusChange("Paid")
-                                statusDropdownOpen = false
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Completed") },
-                            onClick = {
-                                onStatusChange("Completed")
-                                statusDropdownOpen = false
-                            }
-                        )
+                        DealPipelineStage.ALL.forEach { stageOption ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        text = stageOption,
+                                        fontWeight = if (stageOption == normalizedStage) FontWeight.Bold else FontWeight.Normal,
+                                        color = stageColor(stageOption)
+                                    )
+                                },
+                                onClick = {
+                                    onStageChange(stageOption)
+                                    stageDropdownOpen = false
+                                }
+                            )
+                        }
                     }
                 }
             }
 
-            // Contact info rows: Website & Email
+            // Contact & Meta details: Website, Email, Sequence Cadence & A/B Variant
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (client.websiteUrl.isNotBlank()) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.Language,
-                            contentDescription = "Website",
-                            modifier = Modifier.size(14.dp),
-                            tint = CyberPrimaryLight
-                        )
-                        Text(
-                            text = client.websiteUrl,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = CyberPrimaryLight,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Icon(Icons.Default.Language, contentDescription = "Website", modifier = Modifier.size(14.dp), tint = CyberPrimaryLight)
+                        Text(text = client.websiteUrl, style = MaterialTheme.typography.bodySmall, color = CyberPrimaryLight, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
 
                 if (client.email.isNotBlank()) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.Email,
-                            contentDescription = "Email",
-                            modifier = Modifier.size(14.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Icon(Icons.Default.Email, contentDescription = "Email", modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(text = client.email, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+
+                // Sequence & A/B Pill Row
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Sequence: ${client.sequenceStage.ifBlank { "DAY_1" }} • A/B: Variant ${client.abVariant.ifBlank { "A" }}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (client.proposalPrice > 0) {
                         Text(
-                            text = client.email,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            text = "Quote: $${client.proposalPrice}",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = CyberSuccess
                         )
                     }
                 }
             }
 
-            // Action Buttons: Generate SEO Report & Send Pitch Email
+            // Core Action Buttons
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                if (client.websiteUrl.isNotBlank()) {
-                    Button(
-                        onClick = onGenerateReport,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = CyberPrimary.copy(alpha = 0.15f),
-                            contentColor = CyberPrimary
-                        ),
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.testTag("generate_report_button")
-                    ) {
-                        Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = if (client.seoReport.isNotBlank()) "Regenerate Report" else "Generate Report",
-                            style = MaterialTheme.typography.labelMedium
-                        )
-                    }
+                // Generate Proposal & Quote Button
+                Button(
+                    onClick = onGenerateProposalClicked,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = CyberPrimary.copy(alpha = 0.15f),
+                        contentColor = CyberPrimary
+                    ),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.testTag("generate_proposal_button")
+                ) {
+                    Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(if (client.proposalHtml.isNotBlank()) "Update Proposal" else "Generate Proposal & Quote", fontSize = 12.sp)
                 }
 
+                // Request Payment Button
                 Button(
-                    onClick = onSendEmailClicked,
+                    onClick = onRequestPaymentClicked,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = CyberSuccess.copy(alpha = 0.15f),
+                        contentColor = CyberSuccess
+                    ),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.testTag("request_payment_button")
+                ) {
+                    Icon(Icons.Default.Payment, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Request Payment", fontSize = 12.sp)
+                }
+
+                // View Client Portal Button
+                Button(
+                    onClick = onOpenPortalClicked,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = CyberTertiary.copy(alpha = 0.15f),
                         contentColor = CyberTertiary
                     ),
                     shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.testTag("client_portal_button")
+                ) {
+                    Icon(Icons.Default.OpenInBrowser, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Client Portal", fontSize = 12.sp)
+                }
+
+                // Twilio SMS / WhatsApp Outreach Button
+                Button(
+                    onClick = onSendTwilioClicked,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = CyberSecondary.copy(alpha = 0.15f),
+                        contentColor = CyberSecondary
+                    ),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.testTag("twilio_sms_button")
+                ) {
+                    Icon(Icons.Default.Phone, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("WhatsApp / SMS", fontSize = 12.sp)
+                }
+
+                // Multi-Stage Sequence Menu
+                Box {
+                    OutlinedButton(
+                        onClick = { sequenceMenuOpen = true },
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.testTag("sequence_menu_button")
+                    ) {
+                        Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Follow-Up Cadence", fontSize = 12.sp)
+                    }
+
+                    DropdownMenu(
+                        expanded = sequenceMenuOpen,
+                        onDismissRequest = { sequenceMenuOpen = false }
+                    ) {
+                        FollowUpSequenceEngine.FollowUpStage.values().forEach { stage ->
+                            DropdownMenuItem(
+                                text = { Text("${stage.name} (${stage.delayDays}d): ${stage.purpose}") },
+                                onClick = {
+                                    onTriggerSequence(stage)
+                                    sequenceMenuOpen = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                // Email Pitch / Report Button
+                OutlinedButton(
+                    onClick = onSendEmailClicked,
+                    shape = RoundedCornerShape(8.dp),
                     modifier = Modifier.testTag("email_report_button")
                 ) {
-                    Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
+                    Icon(Icons.Default.Email, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Email Deliverable", fontSize = 12.sp)
+                }
+
+                // Generate SEO Report
+                if (client.websiteUrl.isNotBlank()) {
+                    OutlinedButton(
+                        onClick = onGenerateReport,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.testTag("generate_report_button")
+                    ) {
+                        Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("5-Point Audit", fontSize = 12.sp)
+                    }
+                }
+            }
+
+            // Expandable Proposal Section
+            if (client.proposalHtml.isNotBlank()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { expandedProposal = !expandedProposal }
+                        .padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Text(
-                        text = "Email Pitch / Report",
-                        style = MaterialTheme.typography.labelMedium
+                        text = "Formal Proposal ($${client.proposalPrice} USD)",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = CyberPrimary
                     )
+                    Icon(
+                        imageVector = if (expandedProposal) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = null,
+                        tint = CyberPrimary
+                    )
+                }
+
+                AnimatedVisibility(visible = expandedProposal) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Column(modifier = Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(text = client.proposalHtml, style = MaterialTheme.typography.bodySmall)
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                                TextButton(onClick = { onCopyContent(client.proposalHtml, "Proposal") }) {
+                                    Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Copy Proposal")
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -819,7 +1113,7 @@ private fun ClientCardItem(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "Outreach Pitch Message",
+                        text = "Initial Outreach Pitch",
                         style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -833,28 +1127,13 @@ private fun ClientCardItem(
                 AnimatedVisibility(visible = expandedPitch) {
                     Card(
                         modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
-                        ),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
                         shape = RoundedCornerShape(8.dp)
                     ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(10.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Text(
-                                text = client.pitchMessage,
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.End
-                            ) {
-                                TextButton(
-                                    onClick = { onCopyReport(client.pitchMessage) }
-                                ) {
+                        Column(modifier = Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(text = client.pitchMessage, style = MaterialTheme.typography.bodySmall)
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                                TextButton(onClick = { onCopyContent(client.pitchMessage, "Pitch") }) {
                                     Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp))
                                     Spacer(modifier = Modifier.width(4.dp))
                                     Text("Copy Pitch")
@@ -876,22 +1155,11 @@ private fun ClientCardItem(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.Description,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp),
-                            tint = CyberSuccess
-                        )
-                        Text(
-                            text = "5-Point Technical SEO Audit Report",
-                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                            color = CyberSuccess
-                        )
-                    }
+                    Text(
+                        text = "5-Point Technical SEO Audit Report",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                        color = CyberSuccess
+                    )
                     Icon(
                         imageVector = if (expandedReport) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                         contentDescription = null,
@@ -902,27 +1170,14 @@ private fun ClientCardItem(
                 AnimatedVisibility(visible = expandedReport) {
                     Card(
                         modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                        ),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
                         shape = RoundedCornerShape(8.dp)
                     ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(10.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Text(
-                                text = client.seoReport,
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
+                        Column(modifier = Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(text = client.seoReport, style = MaterialTheme.typography.bodySmall)
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                                 Button(
-                                    onClick = { onCopyReport(client.seoReport) },
+                                    onClick = { onCopyContent(client.seoReport, "SEO Report") },
                                     modifier = Modifier.testTag("copy_report_button")
                                 ) {
                                     Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp))

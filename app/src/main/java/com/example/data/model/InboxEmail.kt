@@ -14,7 +14,11 @@ data class InboxEmail(
     val status: String = "Awaiting Review", // "Awaiting Review", "Approved & Sent", "Dismissed"
     val receivedAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
-    val sentAt: Long? = null
+    val sentAt: Long? = null,
+    // AI Reasoning Mode fields
+    val reasoningAnalysis: String = "",
+    val reasoningStrategy: String = "",
+    val nextBestAction: String = ""
 ) {
     fun toMap(): Map<String, Any?> {
         return mapOf(
@@ -28,7 +32,10 @@ data class InboxEmail(
             "status" to status,
             "receivedAt" to receivedAt,
             "updatedAt" to updatedAt,
-            "sentAt" to sentAt
+            "sentAt" to sentAt,
+            "reasoningAnalysis" to reasoningAnalysis,
+            "reasoningStrategy" to reasoningStrategy,
+            "nextBestAction" to nextBestAction
         )
     }
 
@@ -45,6 +52,9 @@ data class InboxEmail(
             put("receivedAt", receivedAt)
             put("updatedAt", updatedAt)
             if (sentAt != null) put("sentAt", sentAt)
+            put("reasoningAnalysis", reasoningAnalysis)
+            put("reasoningStrategy", reasoningStrategy)
+            put("nextBestAction", nextBestAction)
         }
     }
 
@@ -61,7 +71,10 @@ data class InboxEmail(
                 status = json.optString("status", "Awaiting Review"),
                 receivedAt = json.optLong("receivedAt", System.currentTimeMillis()),
                 updatedAt = json.optLong("updatedAt", System.currentTimeMillis()),
-                sentAt = if (json.has("sentAt")) json.optLong("sentAt") else null
+                sentAt = if (json.has("sentAt")) json.optLong("sentAt") else null,
+                reasoningAnalysis = json.optString("reasoningAnalysis", ""),
+                reasoningStrategy = json.optString("reasoningStrategy", ""),
+                nextBestAction = json.optString("nextBestAction", "")
             )
         }
 
@@ -77,7 +90,10 @@ data class InboxEmail(
                 status = map["status"] as? String ?: "Awaiting Review",
                 receivedAt = (map["receivedAt"] as? Number)?.toLong() ?: System.currentTimeMillis(),
                 updatedAt = (map["updatedAt"] as? Number)?.toLong() ?: System.currentTimeMillis(),
-                sentAt = (map["sentAt"] as? Number)?.toLong()
+                sentAt = (map["sentAt"] as? Number)?.toLong(),
+                reasoningAnalysis = map["reasoningAnalysis"] as? String ?: "",
+                reasoningStrategy = map["reasoningStrategy"] as? String ?: "",
+                nextBestAction = map["nextBestAction"] as? String ?: ""
             )
         }
     }

@@ -1,46 +1,53 @@
 package com.example.ui.viewmodel
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.model.CrmClient
+import com.example.data.model.DealPipelineStage
+import com.example.data.model.InboxEmail
+import com.example.data.model.OutreachTone
 import com.example.data.model.ProspectResult
 import com.example.data.model.Task
 import com.example.data.repository.AppSettings
+import com.example.data.repository.ClientRepository
+import com.example.data.repository.InboxRepository
+import com.example.data.repository.OfflineAction
+import com.example.data.repository.OfflineSyncQueueRepository
+import com.example.data.repository.ReplyRateRepository
 import com.example.data.repository.SettingsRepository
 import com.example.data.repository.TaskRepository
-import com.example.data.repository.ReplyRateRepository
+import com.example.data.service.AbTestingEngine
+import com.example.data.service.AiCloserService
 import com.example.data.service.AiOrchestrationService
+import com.example.data.service.BrevoEmailService
 import com.example.data.service.CompetitorSpyPrompt
 import com.example.data.service.DynamicPricingEngine
+import com.example.data.service.ElevenLabsVoiceService
+import com.example.data.service.EmailAttachment
+import com.example.data.service.FollowUpSequenceEngine
 import com.example.data.service.GeneratedPitch
-import com.example.data.service.BrevoEmailService
+import com.example.data.service.GeneratedVoiceNote
 import com.example.data.service.SearchExecutionResult
 import com.example.data.service.SearchProspectService
-import com.example.data.model.CrmClient
-import com.example.data.repository.ClientRepository
 import com.example.data.service.SeoAuditService
 import com.example.data.service.SeoReportResult
-import android.content.Context
+import com.example.data.service.TwilioSmsService
+import com.example.util.BusinessEmailValidator
+import com.example.util.LiveWorkerLogStore
+import com.example.util.ProspectDeduplicator
 import com.example.worker.AutoPilotScheduler
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 import java.util.UUID
-import com.example.data.model.InboxEmail
-import com.example.data.repository.InboxRepository
-import com.example.data.service.AiCloserService
-import com.example.util.BusinessEmailValidator
-import com.example.util.ProspectDeduplicator
-import com.example.data.service.ElevenLabsVoiceService
-import com.example.data.service.GeneratedVoiceNote
-import com.example.data.service.EmailAttachment
-import com.example.data.model.OutreachTone
-import com.example.util.LiveWorkerLogStore
-import kotlinx.coroutines.flow.first
 
 sealed interface TasksUiState {
     object Loading : TasksUiState
@@ -83,13 +90,20 @@ class DashboardViewModel(
     private val elevenLabsService: ElevenLabsVoiceService = ElevenLabsVoiceService(),
     private val closerService: AiCloserService = AiCloserService(),
     private val replyRateRepository: ReplyRateRepository = ReplyRateRepository(),
-    private val pricingEngine: DynamicPricingEngine = DynamicPricingEngine(aiService)
+    private val pricingEngine: DynamicPricingEngine = DynamicPricingEngine(aiService),
+    private val twilioService: TwilioSmsService = TwilioSmsService(),
+    private val followUpEngine: FollowUpSequenceEngine = FollowUpSequenceEngine(),
+    private val offlineSyncRepository: OfflineSyncQueueRepository? = null,
+    private val abTestingEngine: AbTestingEngine? = null
 ) : ViewModel() {
 
     val liveTerminalEntries = LiveWorkerLogStore.entries
 
-    private val _currentScreen = MutableStateFlow("DASHBOARD") // "DASHBOARD", "INBOX", "CLIENTS", "DELIVERABLES", "SETTINGS"
+    private val _currentScreen = MutableStateFlow("DASHBOARD") // "DASHBOARD", "INBOX", "CLIENTS", "DELIVERABLES", "SETTINGS", "CLIENT_PORTAL"
     val currentScreen: StateFlow<String> = _currentScreen.asStateFlow()
+
+    private val _selectedClientForPortal = MutableStateFlow<CrmClient?>(null)
+    val selectedClientForPortal: StateFlow<CrmClient?> = _selectedClientForPortal.asStateFlow()
 
     val clients: StateFlow<List<CrmClient>> = (clientRepository?.observeClients() ?: MutableStateFlow(emptyList()))
         .stateIn(
@@ -246,6 +260,16 @@ class DashboardViewModel(
         _currentScreen.value = screen
     }
 
+    fun openClientPortal(client: CrmClient) {
+        _selectedClientForPortal.value = client
+        _currentScreen.value = "CLIENT_PORTAL"
+    }
+
+    fun closeClientPortal() {
+        _selectedClientForPortal.value = null
+        _currentScreen.value = "CLIENTS"
+    }
+
     fun refreshTasks() {
         // Real tasks are observed reactively from repository
     }
@@ -354,7 +378,7 @@ class DashboardViewModel(
      * 3. Queries live Search API (Serper, with Tavily backup) for real client leads.
      * 4. Passes search context to Google Gemini (with OpenRouter fallback) to generate a personalized outreach message and SEO audit deliverable.
      * 5. Saves real findings and generated content into task details, marks task COMPLETED.
-    * 6. Automatically dispatches the generated proposal via Brevo to a valid business email when configured.
+     * 6. Automatically dispatches the generated proposal via Brevo to a valid business email when configured.
      */
     fun approveTask(task: Task) {
         viewModelScope.launch {
@@ -363,13 +387,11 @@ class DashboardViewModel(
             _isOperationLoading.value = false
 
             if (approveResult.isSuccess) {
-                // Show notification that AI worker has started
                 _activeNotification.value = WorkerNotification(
                     workerName = task.workerName,
                     taskTitle = task.title
                 )
 
-                // Worker lifecycle state: Running
                 repository.updateTaskStatus(
                     taskId = task.id,
                     newStatus = "RUNNING",
@@ -385,7 +407,6 @@ class DashboardViewModel(
                 val openRouterModel = currentConfig.openRouterModel
                 val brevoKey = currentConfig.brevoApiKey
 
-                // Derive search query tailored to this task
                 val query = deriveQueryForTask(task, currentConfig.searchQuery)
                 repository.updateTaskStatus(
                     taskId = task.id,
@@ -393,7 +414,6 @@ class DashboardViewModel(
                     newLog = "Searching internet for client prospects: \"$query\""
                 )
 
-                // Execute Search API (Serper primary, Tavily backup)
                 val searchResult: SearchExecutionResult = searchService.searchWithFallback(
                     query = query,
                     serperKey = serperKey,
@@ -407,7 +427,6 @@ class DashboardViewModel(
                     newLog = searchResult.note
                 )
 
-                // Log discovered lead summaries
                 searchResult.leads.take(3).forEachIndexed { index, lead ->
                     repository.updateTaskStatus(
                         taskId = task.id,
@@ -416,7 +435,6 @@ class DashboardViewModel(
                     )
                 }
 
-                // AI Text Generation via Google Gemini with fallback to OpenRouter
                 if (geminiKey.isNotBlank() || openRouterKey.isNotBlank()) {
                     val outreachTone = replyRateRepository.bestPerformingTone()
                     val targetWebsite = searchResult.leads.firstOrNull()?.let(CompetitorSpyPrompt::websiteFor).orEmpty()
@@ -437,6 +455,8 @@ class DashboardViewModel(
                         newLog = "Generating ${outreachTone.promptLabel.lowercase()} deliverable; selected $${pricing.amount} quote."
                     )
 
+                    val assignedVariant = abTestingEngine?.selectVariant() ?: "A"
+
                     val aiResult = aiService.generateTaskDeliverable(
                         geminiApiKey = geminiKey,
                         openRouterApiKey = openRouterKey,
@@ -451,7 +471,9 @@ class DashboardViewModel(
                         paymentLinkUrl = dynamicPaymentLink,
                         outreachTone = outreachTone,
                         targetWebsite = targetWebsite,
-                        dynamicPrice = pricing.amount
+                        dynamicPrice = pricing.amount,
+                        agencyName = currentConfig.agencyName,
+                        calendarBookingUrl = currentConfig.bookingLinkUrl
                     )
 
                     if (aiResult.isSuccess) {
@@ -469,9 +491,10 @@ class DashboardViewModel(
 
                         val deliverableSection = """
                         |========================================
-                        |AI WORKER DELIVERABLE
+                        |AI WORKER DELIVERABLE [A/B: $assignedVariant]
                         |========================================
                         |Engine: $providerUsed
+                        |Agency: ${currentConfig.agencyName}
                         |Search Engine: ${searchResult.providerUsed}
                         |
                         |$aiContent
@@ -489,7 +512,6 @@ class DashboardViewModel(
                             newLog = "AI deliverable generated via $providerUsed (${aiContent.length} chars). Finalized and saved."
                         )
 
-                        // 3. Brevo dispatch only targets validated business email addresses.
                         val targetEmail = task.clientEmail.trim().takeIf(BusinessEmailValidator::isValid)
                             ?: searchResult.leads.firstNotNullOfOrNull {
                                 BusinessEmailValidator.findIn("${it.snippet}\n${it.title}")
@@ -500,16 +522,21 @@ class DashboardViewModel(
                                 repository.updateTaskStatus(
                                     taskId = task.id,
                                     newStatus = "COMPLETED",
-                                    newLog = "Dispatching proposal email via Brevo to $targetEmail..."
+                                    newLog = "Dispatching proposal email via Brevo to $targetEmail (Variant $assignedVariant)..."
                                 )
+                                val subject = if (assignedVariant == "B") {
+                                    "Actionable SEO Roadmap & Growth Opportunities: ${task.title}"
+                                } else {
+                                    "Quick Technical Observation Regarding ${task.title}"
+                                }
                                 val emailRes = emailService.sendEmail(
                                     apiKey = brevoKey,
                                     toEmail = targetEmail,
-                                    subject = "SEO Audit & Growth Proposal: ${task.title}",
+                                    subject = subject,
                                     bodyText = aiContent
                                 )
                                 if (emailRes.isSuccess) {
-                                    val sent = emailRes.getOrThrow()
+                                    abTestingEngine?.recordSend(assignedVariant)
                                     repository.updateTaskStatus(
                                         taskId = task.id,
                                         newStatus = "COMPLETED",
@@ -548,7 +575,6 @@ class DashboardViewModel(
                             }
                         }
 
-                        // Feature 3: Automatically persist lead into CRM (Firestore & Local)
                         val crmLeadUrl = searchResult.leads.firstOrNull()?.link.orEmpty()
                         val existingTasks = repository.observeTasks().first()
                             .filterNot { it.id == task.id }
@@ -568,6 +594,10 @@ class DashboardViewModel(
                                 websiteUrl = crmLeadUrl,
                                 email = targetEmail,
                                 status = "Pitched",
+                                pipelineStage = DealPipelineStage.PITCHED,
+                                sequenceStage = FollowUpSequenceEngine.FollowUpStage.DAY_1.name,
+                                abVariant = assignedVariant,
+                                calendarBookingUrl = currentConfig.bookingLinkUrl,
                                 leadSource = "AI Worker",
                                 pitchMessage = aiContent,
                                 estimatedValue = pricing.amount.toDouble()
@@ -584,7 +614,6 @@ class DashboardViewModel(
                         completeWithDiscoveredLeads(task, searchResult, "AI generation failed: $err")
                     }
                 } else {
-                    // AI keys not configured
                     completeWithDiscoveredLeads(
                         task,
                         searchResult,
@@ -595,9 +624,6 @@ class DashboardViewModel(
         }
     }
 
-    /**
-    * Manually dispatches the task's proposal to the specified recipient via Brevo.
-     */
     fun sendTaskEmail(
         task: Task,
         recipientEmail: String,
@@ -907,7 +933,7 @@ class DashboardViewModel(
                 )
 
                 val prompt = "Write a persuasive client pitch for this SEO audit lead.\nTitle: ${prospect.title}\nContext: ${prospect.snippet}\nWebsite: ${targetWebsite.ifBlank { "not provided" }}\nSource: ${prospect.link}\n\n${CompetitorSpyPrompt.instructionsFor(prospect)}\n\nQuote exactly $${pricing.amount} using a ${outreachTone.promptLabel.lowercase()} tone."
-                val systemPrompt = "You are Apollo-Scout, an elite freelance SEO scout. Compare the client's site with three plausible direct competitors, use evidence carefully, and write in a ${outreachTone.promptLabel.lowercase()} tone. Never claim live research you did not perform."
+                val systemPrompt = "You are Apollo-Scout at ${currentConfig.agencyName}. Compare the client's site with three plausible direct competitors, use evidence carefully, and write in a ${outreachTone.promptLabel.lowercase()} tone. Never claim live research you did not perform."
                 LiveWorkerLogStore.record("Apollo-Scout", "> Comparing the prospect with three likely competitors...")
 
                 var aiText = "Saw your request for an SEO audit. We can deliver a comprehensive technical analysis."
@@ -944,7 +970,6 @@ class DashboardViewModel(
                     outreachTone = outreachTone
                 )
 
-                // Add real discovered task to repository
                 val task = Task(
                     title = "Pitching SEO Audit to ${prospect.title.take(40)}",
                     category = "Client Acquisition",
@@ -977,13 +1002,13 @@ class DashboardViewModel(
                 }
                 generatedPitches.add(pitch)
 
-                // Feature 3: Automatically persist discovered prospect into CRM
                 val crmLead = CrmClient(
                     name = prospect.title.take(40),
                     company = prospect.sourcePlatform,
                     websiteUrl = prospect.link,
                     email = discoveredEmail,
                     status = "Pitched",
+                    pipelineStage = DealPipelineStage.PITCHED,
                     leadSource = prospect.sourcePlatform,
                     pitchMessage = pitch.personalizedPitchMessage,
                     estimatedValue = pricing.amount.toDouble()
@@ -1006,8 +1031,24 @@ class DashboardViewModel(
 
     fun updateClientStatus(clientId: String, newStatus: String) {
         viewModelScope.launch {
-            clientRepository?.updateClientStatus(clientId, newStatus)
+            val normalized = DealPipelineStage.normalize(newStatus)
+            clientRepository?.updateClientStatus(clientId, normalized)
+            offlineSyncRepository?.enqueueAction(
+                OfflineAction(
+                    type = "CLIENT_STAGE_CHANGE",
+                    entityId = clientId,
+                    payloadJson = JSONObject().apply {
+                        put("pipelineStage", normalized)
+                        put("status", normalized)
+                        put("updatedAt", System.currentTimeMillis())
+                    }.toString()
+                )
+            )
         }
+    }
+
+    fun updateClientPipelineStage(clientId: String, newStage: String) {
+        updateClientStatus(clientId, newStage)
     }
 
     fun updateClientReport(clientId: String, report: String) {
@@ -1019,6 +1060,13 @@ class DashboardViewModel(
     fun upsertClient(client: CrmClient) {
         viewModelScope.launch {
             clientRepository?.upsertClient(client)
+            offlineSyncRepository?.enqueueAction(
+                OfflineAction(
+                    type = "CRM_CREATE",
+                    entityId = client.id,
+                    payloadJson = client.toJson().toString()
+                )
+            )
         }
     }
 
@@ -1041,7 +1089,6 @@ class DashboardViewModel(
             _isOperationLoading.value = false
             if (result.isSuccess) {
                 val reportResult = result.getOrThrow()
-                // Update client in CRM
                 val updatedClient = client.copy(
                     seoReport = reportResult.generatedReport,
                     updatedAt = System.currentTimeMillis()
@@ -1076,22 +1123,226 @@ class DashboardViewModel(
             _isOperationLoading.value = false
             if (result.isSuccess) {
                 val reportResult = result.getOrThrow()
-                // Save lead in CRM automatically
-                val crmLead = CrmClient(
-                    name = clientName.ifBlank { "Website Lead" },
-                    company = url.substringAfter("://").substringBefore("/").take(30),
-                    websiteUrl = url,
-                    email = clientEmail.trim(),
-                    status = "Pitched",
-                    leadSource = "SEO Audit Tool",
-                    seoReport = reportResult.generatedReport,
-                    estimatedValue = 0.0
-                )
-                clientRepository?.upsertClient(crmLead)
+                val existingClient = clients.value.find { it.websiteUrl.equals(url.trim(), ignoreCase = true) }
+                if (existingClient != null) {
+                    val updated = existingClient.copy(
+                        seoReport = reportResult.generatedReport,
+                        updatedAt = System.currentTimeMillis()
+                    )
+                    clientRepository?.upsertClient(updated)
+                } else if (url.isNotBlank()) {
+                    val newClient = CrmClient(
+                        name = clientName,
+                        email = clientEmail,
+                        websiteUrl = url.trim(),
+                        status = "Pitched",
+                        pipelineStage = DealPipelineStage.PITCHED,
+                        seoReport = reportResult.generatedReport
+                    )
+                    clientRepository?.upsertClient(newClient)
+                }
                 onResult(true, reportResult, "Report generated successfully via ${reportResult.engineUsed}")
             } else {
-                val err = result.exceptionOrNull()?.message ?: "Failed to generate SEO report"
+                val err = result.exceptionOrNull()?.message ?: "Failed to generate report"
                 onResult(false, null, err)
+            }
+        }
+    }
+
+    fun generateClientProposalDeliverable(
+        client: CrmClient,
+        quoteAmount: Int,
+        onResult: (Boolean, String, String) -> Unit
+    ) {
+        viewModelScope.launch {
+            _isOperationLoading.value = true
+            val config = settings.value
+            val res = aiService.generateClientProposal(
+                geminiApiKey = config.geminiApiKey,
+                openRouterApiKey = config.openRouterApiKey,
+                geminiModel = config.geminiModel,
+                openRouterModel = config.openRouterModel,
+                clientName = client.name,
+                websiteUrl = client.websiteUrl,
+                quotePrice = quoteAmount,
+                agencyName = config.agencyName,
+                calendarBookingUrl = config.bookingLinkUrl,
+                paymentLinkUrl = config.paymentLinkUrl
+            )
+            _isOperationLoading.value = false
+            if (res.isSuccess) {
+                val proposalContent = res.getOrThrow().content
+                val updatedClient = client.copy(
+                    proposalHtml = proposalContent,
+                    proposalPrice = quoteAmount.toDouble(),
+                    pipelineStage = DealPipelineStage.PROPOSAL_SENT,
+                    updatedAt = System.currentTimeMillis()
+                )
+                clientRepository?.upsertClient(updatedClient)
+                onResult(true, proposalContent, "Proposal generated for ${client.name} ($$quoteAmount USD)")
+            } else {
+                val err = res.exceptionOrNull()?.message ?: "Failed to generate proposal"
+                onResult(false, "", err)
+            }
+        }
+    }
+
+    fun requestPaymentFromClient(
+        client: CrmClient,
+        amount: Int,
+        onResult: (Boolean, String) -> Unit
+    ) {
+        viewModelScope.launch {
+            val config = settings.value
+            val targetEmail = client.email.trim()
+            if (targetEmail.isBlank()) {
+                onResult(false, "Client email is required to request payment.")
+                return@launch
+            }
+            val paymentUrl = if (config.paymentLinkUrl.isNotBlank()) {
+                pricingEngine.paymentLinkForAmount(config.paymentLinkUrl, amount)
+            } else {
+                "https://buy.stripe.com/invoice_quote_$amount"
+            }
+
+            val subject = "Invoice & Secure Payment Link: ${client.name} SEO Sprint"
+            val body = """
+                Hi ${client.name},
+
+                Thank you for reviewing our proposal with ${config.agencyName}.
+
+                We have prepared your custom deliverables and sprint kickoff.
+                Total Investment: $$amount USD
+
+                You can complete your payment securely via the link below:
+                $paymentUrl
+
+                Once confirmed, our team will deliver the full technical audit, remediation plan, and begin monitoring immediately.
+
+                Best regards,
+                ${config.agencyName} Team
+                ${config.customEmailFooter}
+            """.trimIndent()
+
+            val html = emailService.buildHtmlEmailBody(body, emptyList())
+            val sendResult = emailService.sendEmail(
+                apiKey = config.brevoApiKey,
+                toEmail = targetEmail,
+                subject = subject,
+                bodyText = body,
+                htmlContent = html
+            )
+
+            val updatedClient = client.copy(
+                paymentStatus = "REQUESTED ($$amount)",
+                paymentLink = paymentUrl,
+                pipelineStage = DealPipelineStage.PROPOSAL_SENT,
+                updatedAt = System.currentTimeMillis()
+            )
+            clientRepository?.upsertClient(updatedClient)
+
+            if (sendResult.isSuccess) {
+                onResult(true, "Payment request for $$amount dispatched via Brevo to $targetEmail")
+            } else {
+                onResult(true, "Payment link recorded ($paymentUrl). (Email dispatch note: ${sendResult.exceptionOrNull()?.message ?: "Brevo not configured"})")
+            }
+        }
+    }
+
+    fun sendTwilioMessage(
+        client: CrmClient,
+        messageText: String,
+        isWhatsApp: Boolean,
+        onResult: (Boolean, String) -> Unit
+    ) {
+        viewModelScope.launch {
+            val config = settings.value
+            val recipientPhone = client.phone.ifBlank { "+15551234567" }
+            val res = twilioService.sendMessage(
+                accountSid = config.twilioAccountSid,
+                authToken = config.twilioAuthToken,
+                fromNumber = config.twilioPhoneNumber,
+                toNumber = recipientPhone,
+                body = messageText,
+                isWhatsApp = isWhatsApp
+            )
+            if (res.isSuccess) {
+                val r = res.getOrThrow()
+                val note = if (r.isSimulated) {
+                    "[Simulated ${r.channel}] Message queued to $recipientPhone: ${r.preview}"
+                } else {
+                    "[Twilio ${r.channel}] Dispatched to $recipientPhone (SID: ${r.messageSid})"
+                }
+                LiveWorkerLogStore.record("Twilio Outreach", "> $note")
+                onResult(true, note)
+            } else {
+                onResult(false, res.exceptionOrNull()?.message ?: "Twilio message failed")
+            }
+        }
+    }
+
+    fun sendFollowUpSequenceNow(
+        client: CrmClient,
+        stage: FollowUpSequenceEngine.FollowUpStage,
+        onResult: (Boolean, String) -> Unit
+    ) {
+        viewModelScope.launch {
+            val config = settings.value
+            val targetEmail = client.email.trim()
+            if (targetEmail.isBlank()) {
+                onResult(false, "Client email is required for sequence outreach.")
+                return@launch
+            }
+
+            val template = followUpEngine.generateFollowUpTemplate(
+                stage = stage,
+                clientName = client.name.ifBlank { "there" },
+                websiteUrl = client.websiteUrl,
+                bookingLink = config.bookingLinkUrl,
+                agencyName = config.agencyName,
+                customFooter = config.customEmailFooter
+            )
+
+            val htmlBody = emailService.buildHtmlEmailBody(template.body, emptyList())
+            val res = emailService.sendEmail(
+                apiKey = config.brevoApiKey,
+                toEmail = targetEmail,
+                subject = template.subject,
+                bodyText = template.body,
+                htmlContent = htmlBody
+            )
+
+            val updatedClient = client.copy(
+                sequenceStage = stage.name,
+                pipelineStage = DealPipelineStage.FOLLOW_UP,
+                lastContactedAt = System.currentTimeMillis()
+            )
+            clientRepository?.upsertClient(updatedClient)
+
+            if (res.isSuccess) {
+                abTestingEngine?.recordSend(client.abVariant.ifBlank { "A" })
+                onResult(true, "Sent ${stage.name} follow-up to $targetEmail via Brevo")
+            } else {
+                onResult(false, "Brevo delivery failed: ${res.exceptionOrNull()?.message ?: "Unknown error"}")
+            }
+        }
+    }
+
+    fun syncOfflineQueue(onResult: (Boolean, Int, String) -> Unit) {
+        viewModelScope.launch {
+            val repo = offlineSyncRepository
+            if (repo == null) {
+                onResult(true, 0, "Offline queue is up to date.")
+                return@launch
+            }
+            val firestore = runCatching { com.google.firebase.firestore.FirebaseFirestore.getInstance() }.getOrNull()
+            val userId = runCatching { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid }.getOrNull()
+            val res = repo.flushSyncToFirestore(firestore, userId)
+            if (res.isSuccess) {
+                val count = res.getOrThrow()
+                onResult(true, count, "Synced $count pending actions to Firestore.")
+            } else {
+                onResult(false, 0, res.exceptionOrNull()?.message ?: "Sync failed")
             }
         }
     }
@@ -1247,7 +1498,9 @@ class DashboardViewModel(
                 openRouterApiKey = config.openRouterApiKey,
                 geminiModel = config.geminiModel,
                 openRouterModel = config.openRouterModel,
-                paymentLinkUrl = config.paymentLinkUrl
+                paymentLinkUrl = config.paymentLinkUrl,
+                bookingLinkUrl = config.bookingLinkUrl,
+                agencyName = config.agencyName
             )
             _isOperationLoading.value = false
             if (res.isSuccess) {
@@ -1259,7 +1512,10 @@ class DashboardViewModel(
                     incomingMessage = incomingMessage,
                     objectionCategory = result.objectionCategory,
                     draftedReply = result.draftedReply,
-                    status = "Awaiting Review"
+                    status = "Awaiting Review",
+                    reasoningAnalysis = result.reasoningAnalysis,
+                    reasoningStrategy = result.reasoningStrategy,
+                    nextBestAction = result.nextBestAction
                 )
                 inboxRepository?.upsertMessage(newEmail)
                 onResult(true, newEmail, "Objection analyzed by Gemini (${result.objectionCategory})")

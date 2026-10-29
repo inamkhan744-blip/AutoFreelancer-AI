@@ -40,9 +40,12 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.repository.ClientRepository
 import com.example.data.repository.InboxRepository
+import com.example.data.repository.OfflineSyncQueueRepository
 import com.example.data.repository.SettingsRepository
 import com.example.data.repository.TaskRepository
+import com.example.data.service.AbTestingEngine
 import com.example.ui.screens.ClientDeliverablesScreen
+import com.example.ui.screens.ClientPortalScreen
 import com.example.ui.screens.ClientsCrmScreen
 import com.example.ui.screens.DashboardScreen
 import com.example.ui.screens.InboxScreen
@@ -151,6 +154,8 @@ fun AppRootContent() {
     val settingsRepository = remember { SettingsRepository(context) }
     val clientRepository = remember { ClientRepository(context) }
     val inboxRepository = remember { InboxRepository(context) }
+    val offlineSyncRepository = remember { OfflineSyncQueueRepository(context) }
+    val abTestingEngine = remember { AbTestingEngine(context) }
 
     val dashboardViewModel: DashboardViewModel = viewModel(
         factory = object : androidx.lifecycle.ViewModelProvider.Factory {
@@ -160,7 +165,9 @@ fun AppRootContent() {
                     repository = repository,
                     settingsRepository = settingsRepository,
                     clientRepository = clientRepository,
-                    inboxRepository = inboxRepository
+                    inboxRepository = inboxRepository,
+                    offlineSyncRepository = offlineSyncRepository,
+                    abTestingEngine = abTestingEngine
                 ) as T
             }
         }
@@ -168,6 +175,7 @@ fun AppRootContent() {
 
     val currentScreen by dashboardViewModel.currentScreen.collectAsState()
     val inboxEmails by dashboardViewModel.inboxEmails.collectAsState()
+    val selectedPortalClient by dashboardViewModel.selectedClientForPortal.collectAsState()
     val pendingInboxCount = inboxEmails.count { it.status == "Awaiting Review" }
 
     Scaffold(
@@ -205,7 +213,7 @@ fun AppRootContent() {
                 NavigationBarItem(
                     icon = { Icon(Icons.Default.People, contentDescription = "Clients") },
                     label = { Text("Clients") },
-                    selected = currentScreen == "CLIENTS",
+                    selected = currentScreen == "CLIENTS" || currentScreen == "CLIENT_PORTAL",
                     onClick = { dashboardViewModel.navigateTo("CLIENTS") },
                     modifier = Modifier.testTag("nav_tab_clients"),
                     colors = NavigationBarItemDefaults.colors(selectedIconColor = CyberPrimary, selectedTextColor = CyberPrimary, indicatorColor = CyberPrimary.copy(alpha = 0.15f))
@@ -237,6 +245,7 @@ fun AppRootContent() {
             when (currentScreen) {
                 "INBOX" -> InboxScreen(viewModel = dashboardViewModel, onNavigateBack = { dashboardViewModel.navigateTo("DASHBOARD") })
                 "CLIENTS" -> ClientsCrmScreen(viewModel = dashboardViewModel, onNavigateBack = { dashboardViewModel.navigateTo("DASHBOARD") })
+                "CLIENT_PORTAL" -> ClientPortalScreen(viewModel = dashboardViewModel, client = selectedPortalClient, onNavigateBack = { dashboardViewModel.closeClientPortal() })
                 "DELIVERABLES" -> ClientDeliverablesScreen(viewModel = dashboardViewModel, onNavigateBack = { dashboardViewModel.navigateTo("DASHBOARD") })
                 "SETTINGS" -> SettingsScreen(viewModel = dashboardViewModel, onNavigateBack = { dashboardViewModel.navigateTo("DASHBOARD") })
                 else -> DashboardScreen(viewModel = dashboardViewModel, onNavigateToSettings = { dashboardViewModel.navigateTo("SETTINGS") }, onSignOutClicked = { dashboardViewModel.refreshTasks() })

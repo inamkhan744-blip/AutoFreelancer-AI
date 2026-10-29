@@ -22,10 +22,23 @@ class SearchProspectService(
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(25, TimeUnit.SECONDS)
-        .build()
+        .build(),
+    val enrichmentEngine: LeadEnrichmentEngine = LeadEnrichmentEngine()
 ) {
     private val tag = "SearchProspectService"
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
+
+    suspend fun enrichLead(prospect: ProspectResult): ProspectResult = withContext(Dispatchers.IO) {
+        val enrichment = enrichmentEngine.enrichWebsite(prospect.link)
+        prospect.copy(enrichment = enrichment)
+    }
+
+    suspend fun enrichLeads(leads: List<ProspectResult>): List<ProspectResult> = withContext(Dispatchers.IO) {
+        leads.map { lead ->
+            val enrichment = enrichmentEngine.enrichWebsite(lead.link)
+            lead.copy(enrichment = enrichment)
+        }
+    }
 
     suspend fun searchWithFallback(
         query: String,
@@ -40,13 +53,14 @@ class SearchProspectService(
         if (cleanSerper.isNotBlank()) {
             val serperResult = searchViaSerper(searchQuery, cleanSerper)
             if (serperResult.isSuccess) {
-                val leads = serperResult.getOrThrow()
-                if (leads.isNotEmpty()) {
+                val rawLeads = serperResult.getOrThrow()
+                if (rawLeads.isNotEmpty()) {
+                    val enriched = enrichLeads(rawLeads.take(4))
                     return@withContext SearchExecutionResult(
-                        leads = leads,
+                        leads = enriched,
                         providerUsed = "Serper.dev",
                         isBackupUsed = false,
-                        note = "Retrieved ${leads.size} live leads from Google via Serper API"
+                        note = "Retrieved & enriched ${enriched.size} live leads from Google via Serper API"
                     )
                 }
             } else {
@@ -58,16 +72,17 @@ class SearchProspectService(
         if (cleanTavily.isNotBlank()) {
             val tavilyResult = searchViaTavily(searchQuery, cleanTavily)
             if (tavilyResult.isSuccess) {
-                val leads = tavilyResult.getOrThrow()
+                val rawLeads = tavilyResult.getOrThrow()
                 val usedBackup = cleanSerper.isNotBlank()
+                val enriched = enrichLeads(rawLeads.take(4))
                 return@withContext SearchExecutionResult(
-                    leads = leads,
+                    leads = enriched,
                     providerUsed = "Tavily AI Search",
                     isBackupUsed = usedBackup,
                     note = if (usedBackup) {
-                        "Serper unavailable. Successfully recovered with Tavily Backup (${leads.size} leads)"
+                        "Serper unavailable. Successfully recovered with Tavily Backup (${enriched.size} enriched leads)"
                     } else {
-                        "Retrieved ${leads.size} live leads via Tavily Search API"
+                        "Retrieved & enriched ${enriched.size} live leads via Tavily Search API"
                     }
                 )
             } else {
@@ -83,8 +98,11 @@ class SearchProspectService(
             "Live Search APIs reached rate limit or returned zero items. Using fallback targets."
         }
 
+        val fallbackLeads = getFallbackProspects(searchQuery)
+        val enrichedFallback = enrichLeads(fallbackLeads.take(3))
+
         SearchExecutionResult(
-            leads = getFallbackProspects(searchQuery),
+            leads = enrichedFallback,
             providerUsed = "Sandbox Fallback",
             isBackupUsed = true,
             note = note

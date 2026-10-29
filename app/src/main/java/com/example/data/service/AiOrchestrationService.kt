@@ -511,10 +511,12 @@ class AiOrchestrationService(
         paymentLinkUrl: String = "",
         outreachTone: OutreachTone = OutreachTone.PROFESSIONAL,
         targetWebsite: String = "",
-        dynamicPrice: Int? = null
+        dynamicPrice: Int? = null,
+        agencyName: String = "Apex Growth Agency",
+        calendarBookingUrl: String = ""
     ): Result<AiGenerationResult> {
         val systemPrompt = """
-            You are $workerName, acting as an elite $workerRole in the AutoFreelancer AI agency.
+            You are $workerName, acting as an elite $workerRole at $agencyName.
             You produce real, high-impact deliverables, client outreach proposals, and technical SEO action plans.
             Always format your response cleanly with clear section headings and actionable recommendations.
             Use a ${outreachTone.promptLabel.lowercase()} outreach tone based on the strongest observed reply rate.
@@ -523,17 +525,40 @@ class AiOrchestrationService(
 
         val leadsSummary = if (leads.isNotEmpty()) {
             leads.mapIndexed { idx, lead ->
-                """
-                Lead #${idx + 1}:
-                - Title: ${lead.title}
-                - URL: ${lead.link}
-                - Source: ${lead.sourcePlatform}
-                - Notes/Context: ${lead.snippet}
-                """.trimIndent()
+                buildString {
+                    append("Lead #${idx + 1}:\n")
+                    append("- Title: ${lead.title}\n")
+                    append("- URL: ${lead.link}\n")
+                    append("- Source: ${lead.sourcePlatform}\n")
+                    append("- Notes/Context: ${lead.snippet}\n")
+                    if (lead.enrichment != null) {
+                        append("- Scraped Title: ${lead.enrichment.siteTitle}\n")
+                        append("- Meta Description: ${lead.enrichment.metaDescription}\n")
+                        append("- Tech Stack: ${lead.enrichment.techStack.joinToString(", ")}\n")
+                        append("- Niche: ${lead.enrichment.nicheSummary}\n")
+                        append("- Suggested First Line Hook: \"${lead.enrichment.customFirstLineHook}\"\n")
+                    }
+                }
             }.joinToString("\n\n")
         } else {
             "Targeting general prospect inquiries and organic SEO search opportunities."
         }
+
+        val enrichedLead = leads.firstOrNull { it.enrichment != null }?.enrichment
+        val enrichmentInstructions = if (enrichedLead != null) {
+            """
+            WEBSITE ENRICHMENT & HYPER-PERSONALIZATION REQUIREMENT:
+            - Target Domain Tech Stack: ${enrichedLead.techStack.joinToString(", ")}
+            - Identified Niche: ${enrichedLead.nicheSummary}
+            - Page Title & Description: "${enrichedLead.siteTitle}" — "${enrichedLead.metaDescription}"
+            - MANDATORY OPENING HOOK: Your very first sentence MUST open with a hyper-personalized reference like:
+              "${enrichedLead.customFirstLineHook}"
+              Never use boring boilerplate greetings like "Dear friend", "Hope this finds you well", or "I noticed your website".
+            """.trimIndent()
+        } else {
+            "PERSONALIZATION HOOK: Make the first line highly specific to the client's business niche and actual search presence."
+        }
+
         val website = targetWebsite.ifBlank {
             leads.firstOrNull()?.let(CompetitorSpyPrompt::websiteFor).orEmpty()
         }
@@ -550,13 +575,15 @@ class AiOrchestrationService(
             DISCOVERED LIVE SEARCH LEADS:
             $leadsSummary
 
+            $enrichmentInstructions
+
             $competitorInstructions
             
             INSTRUCTIONS:
-            1. Craft a personalized, non-spammy outreach message or deliverable tailored directly to the prospect and findings above.
+            1. Craft a hyper-personalized, non-spammy outreach message tailored directly to the prospect using the enrichment details above.
             2. Include 3 specific high-impact audit findings / hypotheses (e.g., Core Web Vitals, indexation bloat, programmatic keyword cannibalization, internal linking).
             3. ${dynamicPrice?.let { "Quote exactly $$it for the audit." } ?: "Provide an estimated project scope value."}
-            4. Provide a zero-friction Call to Action (e.g. proposing a 4-minute Loom video audit).
+            4. Provide a zero-friction Call to Action${if (calendarBookingUrl.isNotBlank()) " inviting them to book a quick 10-minute strategy session at $calendarBookingUrl" else " proposing a 4-minute Loom video audit"}.
             5. Make it ready to deliver immediately.
         """.trimIndent()
 
@@ -581,5 +608,56 @@ class AiOrchestrationService(
         } else {
             genResult
         }
+    }
+
+    /**
+     * Generates a formal, comprehensive client proposal and price quote deliverable.
+     */
+    suspend fun generateClientProposal(
+        geminiApiKey: String,
+        openRouterApiKey: String,
+        geminiModel: String = PRIMARY_GEMINI_MODEL,
+        openRouterModel: String = FALLBACK_OPENROUTER_MODEL,
+        clientName: String,
+        websiteUrl: String,
+        quotePrice: Int,
+        agencyName: String = "Apex Growth Agency",
+        calendarBookingUrl: String = "",
+        paymentLinkUrl: String = ""
+    ): Result<AiGenerationResult> {
+        val systemPrompt = """
+            You are the Principal Solutions Architect at $agencyName.
+            You prepare authoritative, C-level technical SEO and growth proposals.
+            Your proposals are structured, persuasive, and transparent.
+        """.trimIndent()
+
+        val userPrompt = """
+            PROPOSAL REQUEST:
+            Client: $clientName
+            Website: $websiteUrl
+            Agreed / Quoted Price: $$quotePrice USD
+            Agency: $agencyName
+            Calendar Link: ${calendarBookingUrl.ifBlank { "https://calendly.com/apex-growth/intro" }}
+            Payment Link: ${paymentLinkUrl.ifBlank { "https://stripe.com/invoice" }}
+
+            Generate a clean, high-converting Proposal Document with the following sections:
+            1. EXECUTIVE SUMMARY (The strategic opportunity for $clientName)
+            2. SCOPE OF DELIVERABLES (Comprehensive Technical Audit, Keyword Roadmap, Core Web Vitals Optimization, Backlink Gap Analysis, Schema Markup)
+            3. IMPLEMENTATION TIMELINE (Week 1: Deep Crawl; Week 2: Remediation Specs; Week 3: Content Relaunch; Week 4: Performance Review)
+            4. COMMERCIAL INVESTMENT & TERMS (Investment: $$quotePrice USD flat, 100% money-back satisfaction guarantee)
+            5. NEXT STEPS (Acceptance link and onboarding call scheduler)
+            
+            Format clearly in clean Markdown.
+        """.trimIndent()
+
+        return generateContentWithFallback(
+            geminiApiKey = geminiApiKey,
+            openRouterApiKey = openRouterApiKey,
+            geminiModel = geminiModel,
+            openRouterModel = openRouterModel,
+            systemPrompt = systemPrompt,
+            userPrompt = userPrompt,
+            maxTokens = 2000
+        )
     }
 }

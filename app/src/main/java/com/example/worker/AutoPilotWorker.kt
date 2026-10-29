@@ -2,61 +2,50 @@ package com.example.worker
 
 import android.content.Context
 import android.util.Log
-import androidx.work.Constraints
 import androidx.work.CoroutineWorker
-import androidx.work.ExistingPeriodicWorkPolicy
-import androidx.work.ExistingWorkPolicy
-import androidx.work.NetworkType
-import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.PeriodicWorkRequestBuilder
-import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.example.data.model.CrmClient
+import com.example.data.model.DealPipelineStage
 import com.example.data.model.OutreachTone
+import com.example.data.model.ProspectResult
 import com.example.data.model.Task
 import com.example.data.repository.ClientRepository
 import com.example.data.repository.ReplyRateRepository
 import com.example.data.repository.SettingsRepository
 import com.example.data.repository.TaskRepository
+import com.example.data.service.AbTestingEngine
 import com.example.data.service.AiOrchestrationService
 import com.example.data.service.BrevoEmailService
-import com.example.data.service.CompetitorSpyPrompt
 import com.example.data.service.DynamicPricingEngine
+import com.example.data.service.FollowUpSequenceEngine
 import com.example.data.service.SearchProspectService
 import com.example.util.BusinessEmailValidator
 import com.example.util.LiveWorkerLogStore
 import com.example.util.ProspectDeduplicator
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import java.util.concurrent.TimeUnit
 
 class AutoPilotWorker(
-    appContext: Context,
+    private val context: Context,
     workerParams: WorkerParameters
-) : CoroutineWorker(appContext, workerParams) {
+) : CoroutineWorker(context, workerParams) {
 
     private val tag = "AutoPilotWorker"
 
     override suspend fun doWork(): Result {
-        try {
-            Log.i(tag, "Auto-Pilot worker triggered in background")
-            LiveWorkerLogStore.record("Auto-Pilot", "> Background worker started.")
-            val context = applicationContext
-            val settingsRepo = SettingsRepository(context)
-            try {
-                settingsRepo.loadCloudSettings()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.e(tag, "Failed to load cloud settings: ${e.message}", e)
-            }
-            val settings = settingsRepo.settingsFlow.value
+        Log.i(tag, "AutoPilotWorker started execution...")
+        LiveWorkerLogStore.record("Auto-Pilot", "Worker cycle initiated.")
 
-            if (!settings.autoPilotEnabled) {
-                Log.i(tag, "Auto-Pilot is currently disabled in Settings. Exiting job.")
-                return Result.success()
-            }
+        val settingsRepo = SettingsRepository(context)
+        val settings = settingsRepo.settingsFlow.value
 
+        if (!settings.autoPilotEnabled) {
+            Log.i(tag, "Auto-Pilot is disabled in settings. Skipping cycle.")
+            LiveWorkerLogStore.record("Auto-Pilot", "Skipped: Auto-Pilot mode is toggled OFF in Settings.")
+            return Result.success()
+        }
+
+        return try {
             val taskRepo = TaskRepository(context)
             val clientRepo = ClientRepository(context)
             val aiService = AiOrchestrationService()
@@ -64,11 +53,11 @@ class AutoPilotWorker(
             val emailService = BrevoEmailService()
             val replyRateRepository = ReplyRateRepository()
             val pricingEngine = DynamicPricingEngine(aiService)
+            val abTestingEngine = AbTestingEngine(context)
+            val followUpEngine = FollowUpSequenceEngine()
 
             val currentTasks = taskRepo.observeTasks().first()
             val pendingTasks = currentTasks.filter { it.status == "PENDING" }
-
-            Log.i(tag, "Found ${pendingTasks.size} pending tasks to auto-execute")
 
             for (task in pendingTasks) {
                 executeTaskAutonomously(
@@ -79,250 +68,204 @@ class AutoPilotWorker(
                     aiService = aiService,
                     replyRateRepository = replyRateRepository,
                     pricingEngine = pricingEngine,
-                    searchService = searchService,
-                    emailService = emailService
+                    emailService = emailService,
+                    abTestingEngine = abTestingEngine
                 )
             }
 
-            checkForStaleFollowUps(taskRepo, settings, emailService)
+            checkForStaleFollowUps(taskRepo, clientRepo, settings, emailService, abTestingEngine, followUpEngine)
 
             val canRunDiscovery = settings.isSearchConfigured || settings.isAiConfigured
             if (pendingTasks.isEmpty() && canRunDiscovery) {
                 Log.i(tag, "Running autonomous lead discovery in background...")
                 LiveWorkerLogStore.record("Apollo-Scout", "> Scraping Reddit, LinkedIn, and web search results...")
+
                 val searchResult = searchService.searchWithFallback(
-                    query = settings.searchQuery,
+                    query = "need SEO help site:reddit.com OR site:linkedin.com",
                     serperKey = settings.serperApiKey,
                     tavilyKey = settings.tavilyApiKey
                 )
 
-                val knownProspects = ProspectDeduplicator(
-                    tasks = taskRepo.observeTasks().first(),
-                    clients = clientRepo.observeClients().first()
-                )
-                val leads = searchResult.leads.mapNotNull { prospect ->
-                    val discoveredEmail = BusinessEmailValidator.findIn("${prospect.snippet}\n${prospect.title}")
-                    if (discoveredEmail == null) {
-                        Log.i(tag, "Skipping lead without a valid business email: ${prospect.title}")
-                        null
-                    } else if (knownProspects.contains(prospect.link, discoveredEmail)) {
-                        Log.i(tag, "Skipping existing lead: ${prospect.link}")
-                        null
-                    } else {
-                        knownProspects.remember(prospect.link, discoveredEmail)
-                        prospect to discoveredEmail
-                    }
-                }.take(3)
+                LiveWorkerLogStore.record("Apollo-Scout", "> Discovery provider used: ${searchResult.providerUsed}")
 
-                for ((prospect, discoveredEmail) in leads) {
+                val existingClients = clientRepo.observeClients().first()
+                val existingTasks = taskRepo.observeTasks().first()
+                val deduplicator = ProspectDeduplicator(tasks = existingTasks, clients = existingClients)
+
+                var newLeadsCount = 0
+                for (prospect in searchResult.leads) {
+                    val targetWebsite = extractWebsiteUrl(prospect.snippet)
+                    val discoveredEmail = BusinessEmailValidator.findIn(prospect.snippet).orEmpty()
+
+                    if (deduplicator.contains(
+                            url = targetWebsite.ifBlank { prospect.link },
+                            email = discoveredEmail
+                        )
+                    ) {
+                        LiveWorkerLogStore.record(
+                            "Apollo-Scout",
+                            "> Skipped duplicate lead: ${prospect.title.take(30)}..."
+                        )
+                        continue
+                    }
+
+                    deduplicator.remember(url = targetWebsite.ifBlank { prospect.link }, email = discoveredEmail)
+
                     val outreachTone = replyRateRepository.bestPerformingTone()
-                    val targetWebsite = CompetitorSpyPrompt.websiteFor(prospect)
-                    LiveWorkerLogStore.record("Apollo-Scout", "> Analyzing business scale for a dynamic quote...")
                     val pricing = pricingEngine.decide(
-                        website = targetWebsite,
-                        context = "${prospect.title}\n${prospect.snippet}",
+                        website = targetWebsite.ifBlank { prospect.link },
+                        context = prospect.snippet,
                         geminiApiKey = settings.geminiApiKey,
                         openRouterApiKey = settings.openRouterApiKey,
                         geminiModel = settings.geminiModel,
                         openRouterModel = settings.openRouterModel
                     )
-                    val dynamicPaymentLink = pricingEngine.paymentLinkForAmount(settings.paymentLinkUrl, pricing.amount)
-                    LiveWorkerLogStore.record("Apollo-Scout", "> ${prospect.sourcePlatform}: selected $${pricing.amount}; tone ${outreachTone.promptLabel}.")
-
-                    val prompt = "Write a persuasive personalized pitch.\nTitle: ${prospect.title}\nContext: ${prospect.snippet}\nClient website: ${targetWebsite.ifBlank { "not provided" }}\nSource: ${prospect.sourcePlatform}\n"
-                    val systemPrompt = "You are Apollo-Scout. Compare the client's site with three plausible direct competitors and write in a ${outreachTone.promptLabel.lowercase()} tone. Be explicit, concise, and focused on conversion."
-                    LiveWorkerLogStore.record("Apollo-Scout", "> Comparing three likely competitors and generating price...")
-
-                    val aiRes = aiService.generateContentWithFallback(
-                        geminiApiKey = settings.geminiApiKey,
-                        openRouterApiKey = settings.openRouterApiKey,
-                        geminiModel = settings.geminiModel,
-                        openRouterModel = settings.openRouterModel,
-                        systemPrompt = systemPrompt,
-                        userPrompt = prompt,
-                        maxTokens = 800
-                    )
-
-                    var pitchBody = if (aiRes.isSuccess) {
-                        aiRes.getOrThrow().content
-                    } else {
-                        "Saw your request for an SEO audit. We can deliver a comprehensive technical analysis."
-                    }
-
-                    if (dynamicPaymentLink.isNotBlank()) {
-                        pitchBody += "\n\nThe ${outreachTone.promptLabel.lowercase()} audit package is $${pricing.amount}. Complete payment here: $dynamicPaymentLink"
-                    }
 
                     val siteUrl = targetWebsite.ifBlank { prospect.link }
                     val miniAuditPoints = emailService.generateMiniAuditPoints(siteUrl)
-                    val htmlBody = emailService.buildHtmlEmailBody(pitchBody, miniAuditPoints)
-                    val leadScore = computeLeadScore(targetWebsite, pricing.amount, discoveredEmail)
+                    val leadScore = computeLeadScore(targetWebsite, pricing.amount.toDouble(), discoveredEmail)
+                    val assignedVariant = abTestingEngine.selectVariant()
 
                     val autoTask = Task(
                         title = "Auto-Pilot: Outreach to ${prospect.title.take(35)}",
                         category = "Client Acquisition",
                         workerName = "Apollo-Scout",
-                        workerRole = "Autonomous Scout",
+                        workerRole = "Lead Acquisition Scout",
                         status = "PENDING",
                         priority = "HIGH",
-                        client = "${prospect.sourcePlatform} Lead",
+                        client = prospect.title.take(30),
                         clientEmail = discoveredEmail,
-                        estimatedValue = pricing.amount.toDouble(),
-                        details = buildString {
-                            append("AUTONOMOUS BACKGROUND OUTREACH:\n\n")
-                            append(pitchBody)
-                            append("\n\nDiscovered URL: ${prospect.link}\n")
-                            append("\nMini-audit:\n")
-                            miniAuditPoints.forEachIndexed { index, point ->
-                                append("${index + 1}. $point\n")
-                            }
-                            append("\nLead score: $leadScore/100\n")
-                        },
-                        logs = listOf(
-                            "⚡ [Auto-Pilot] Discovered prospect via ${searchResult.providerUsed} on ${prospect.sourcePlatform}",
-                            "⚡ [Auto-Pilot] Proposal drafted and queued for Auto-Pilot execution.",
-                            "Selected outreach tone: ${outreachTone.name}",
-                            "Dynamic audit quote: $${pricing.amount} (${pricing.segment})",
-                            "Lead score: $leadScore/100"
+                        details = prospect.snippet,
+                        estimatedValue = pricing.amount.toDouble()
+                    )
+
+                    val createdId = taskRepo.createTask(autoTask).getOrNull()
+                    if (createdId != null) {
+                        newLeadsCount++
+                        LiveWorkerLogStore.record("Apollo-Scout", "> Enqueued autonomous task for: ${prospect.title.take(40)}")
+
+                        val pitchBody = "Hi ${prospect.title.take(25)},\n\n" +
+                            "I noticed your interest in technical optimization on ${prospect.sourcePlatform}.\n\n" +
+                            miniAuditPoints.joinToString("\n") + "\n\n" +
+                            "Let me know if you would like us to resolve these items for you.\n\n" +
+                            "Best regards,\n${settings.agencyName}"
+
+                        val autoClient = CrmClient(
+                            name = prospect.title.take(40),
+                            company = prospect.sourcePlatform,
+                            websiteUrl = targetWebsite.ifBlank { prospect.link },
+                            email = discoveredEmail,
+                            status = "Pitched",
+                            leadSource = "Auto-Pilot Discovery",
+                            pitchMessage = pitchBody,
+                            estimatedValue = pricing.amount.toDouble(),
+                            leadScore = leadScore,
+                            pipelineStage = DealPipelineStage.PITCHED,
+                            sequenceStage = FollowUpSequenceEngine.FollowUpStage.DAY_1.name,
+                            abVariant = assignedVariant,
+                            calendarBookingUrl = settings.bookingLinkUrl,
+                            lastContactedAt = System.currentTimeMillis(),
+                            nextFollowUpAt = System.currentTimeMillis() + TimeUnit.DAYS.toMillis(2)
                         )
-                    )
+                        clientRepo.upsertClient(autoClient)
 
-                    val taskResult = taskRepo.createTask(autoTask)
-                    if (taskResult.isFailure) {
-                        val error = taskResult.exceptionOrNull()?.message ?: "Unable to save discovered lead task."
-                        Log.e(tag, "Failed to save discovered lead ${prospect.link}: $error")
-                        continue
-                    }
-
-                    val crmLead = CrmClient(
-                        name = prospect.title.take(40),
-                        company = prospect.sourcePlatform,
-                        websiteUrl = prospect.link,
-                        email = discoveredEmail,
-                        status = "Pitched",
-                        leadSource = "Auto-Pilot Discovery",
-                        pitchMessage = pitchBody,
-                        estimatedValue = pricing.amount.toDouble(),
-                        leadScore = leadScore,
-                        pipelineStage = "Pitched",
-                        lastContactedAt = System.currentTimeMillis(),
-                        nextFollowUpAt = System.currentTimeMillis() + TimeUnit.DAYS.toMillis(3)
-                    )
-                    val clientResult = clientRepo.upsertClient(crmLead)
-                    if (clientResult.isFailure) {
-                        val error = clientResult.exceptionOrNull()?.message ?: "Unable to save lead to CRM."
-                        Log.e(tag, "Failed to save discovered lead ${prospect.link} to CRM: $error")
+                        // Immediately execute the new task
+                        val savedTask = autoTask.copy(id = createdId)
+                        executeTaskAutonomously(
+                            task = savedTask,
+                            settingsRepo = settingsRepo,
+                            taskRepo = taskRepo,
+                            clientRepo = clientRepo,
+                            aiService = aiService,
+                            replyRateRepository = replyRateRepository,
+                            pricingEngine = pricingEngine,
+                            emailService = emailService,
+                            abTestingEngine = abTestingEngine
+                        )
                     }
                 }
+                LiveWorkerLogStore.record("Apollo-Scout", "> Cycle finished: $newLeadsCount new leads enqueued and executed.")
             }
 
-            return Result.success()
-        } catch (e: CancellationException) {
-            throw e
+            Log.i(tag, "AutoPilotWorker completed cycle successfully.")
+            Result.success()
         } catch (e: Exception) {
-            Log.e(tag, "Auto-Pilot execution encountered error: ${e.message}", e)
-            return Result.failure()
+            Log.e(tag, "AutoPilotWorker cycle encountered an error: ${e.message}", e)
+            LiveWorkerLogStore.record("Auto-Pilot", "Cycle error: ${e.message}")
+            Result.retry()
         }
     }
 
     private fun computeLeadScore(websiteUrl: String, price: Double, email: String): Int {
-        var score = 35
+        var score = 40
         if (websiteUrl.isNotBlank()) score += 20
-        if (email.isNotBlank()) score += 15
-        score += when {
-            price >= 5000.0 -> 20
-            price >= 2000.0 -> 15
-            price >= 800.0 -> 10
-            else -> 5
-        }
-        if (score > 100) score = 100
-        return score
+        if (email.isNotBlank()) score += 25
+        if (price >= 900.0) score += 15
+        return score.coerceIn(10, 100)
     }
 
     private suspend fun checkForStaleFollowUps(
         taskRepo: TaskRepository,
+        clientRepo: ClientRepository,
         settings: com.example.data.repository.AppSettings,
-        emailService: BrevoEmailService
+        emailService: BrevoEmailService,
+        abTestingEngine: AbTestingEngine,
+        followUpEngine: FollowUpSequenceEngine
     ) {
         if (!settings.isBrevoConfigured) {
             return
         }
 
-        val tasks = taskRepo.observeTasks().first()
-        val staleTasks = tasks.filter { task ->
-            if (task.clientEmail.isBlank()) return@filter false
-            if (task.status !in listOf("PITCHED", "RUNNING")) return@filter false
+        // Multi-Stage Automated Follow-Up Cadence on CRM Clients
+        try {
+            val crmClients = clientRepo.observeClients().first()
+            val now = System.currentTimeMillis()
 
-            val lastUpdatedMs = task.updatedAt?.toDate()?.time ?: task.createdAt?.toDate()?.time ?: 0L
-            val noReply = task.logs.none { log ->
-                log.contains("reply", ignoreCase = true) ||
-                    log.contains("replied", ignoreCase = true) ||
-                    log.contains("response", ignoreCase = true)
+            for (client in crmClients) {
+                if (client.email.isBlank()) continue
+                val normalizedStage = DealPipelineStage.normalize(client.pipelineStage)
+                if (normalizedStage in listOf(DealPipelineStage.WON, DealPipelineStage.LOST, DealPipelineStage.CALL_BOOKED)) {
+                    continue
+                }
+
+                val currentSeq = FollowUpSequenceEngine.FollowUpStage.fromString(client.sequenceStage)
+                val nextSeq = followUpEngine.determineNextFollowUp(currentSeq, client.lastContactedAt, now) ?: continue
+
+                val template = followUpEngine.generateFollowUpTemplate(
+                    stage = nextSeq,
+                    clientName = client.name.ifBlank { "there" },
+                    websiteUrl = client.websiteUrl,
+                    bookingLink = settings.bookingLinkUrl,
+                    agencyName = settings.agencyName,
+                    customFooter = settings.customEmailFooter
+                )
+
+                val htmlBody = emailService.buildHtmlEmailBody(template.body, emptyList())
+                val emailResult = emailService.sendEmail(
+                    apiKey = settings.brevoApiKey,
+                    toEmail = client.email,
+                    subject = template.subject,
+                    bodyText = template.body,
+                    htmlContent = htmlBody
+                )
+
+                if (emailResult.isSuccess) {
+                    val variantToRecord = client.abVariant.ifBlank { "A" }
+                    abTestingEngine.recordSend(variantToRecord)
+                    LiveWorkerLogStore.record("AutoPilot Follow-Up", "> Sent ${nextSeq.name} follow-up to ${client.email}")
+
+                    val updatedClient = client.copy(
+                        sequenceStage = nextSeq.name,
+                        pipelineStage = DealPipelineStage.FOLLOW_UP,
+                        lastContactedAt = now,
+                        nextFollowUpAt = now + TimeUnit.DAYS.toMillis(nextSeq.delayDays.toLong())
+                    )
+                    clientRepo.upsertClient(updatedClient)
+                }
             }
-            System.currentTimeMillis() - lastUpdatedMs > TimeUnit.DAYS.toMillis(3) && noReply
+        } catch (e: Exception) {
+            Log.w(tag, "CRM multi-stage follow-up cadence error: ${e.message}")
         }
-
-        for (task in staleTasks) {
-            val followUpBody = buildFollowUpBody(task)
-            val miniAuditPoints = emailService.generateMiniAuditPoints(task.client.ifBlank { task.clientEmail })
-            val htmlContent = emailService.buildHtmlEmailBody(followUpBody, miniAuditPoints)
-
-            val result = emailService.sendEmail(
-                apiKey = settings.brevoApiKey,
-                toEmail = task.clientEmail,
-                subject = "Just checking in on my previous SEO audit email",
-                bodyText = followUpBody,
-                htmlContent = htmlContent
-            )
-
-            val followUpTask = Task(
-                title = "Follow-up: ${task.client.ifBlank { "Client" }}",
-                category = "Client Acquisition",
-                workerName = "AutoPilot Follow-Up",
-                workerRole = "Follow-up Specialist",
-                status = "PENDING",
-                priority = "MEDIUM",
-                client = task.client.ifBlank { "Client" },
-                clientEmail = task.clientEmail,
-                estimatedValue = task.estimatedValue,
-                details = followUpBody,
-                logs = listOf(
-                    "Follow-up task created automatically after 3+ days with no reply.",
-                    "Follow-up email sent to ${task.clientEmail}"
-                )
-            )
-            taskRepo.createTask(followUpTask)
-
-            if (result.isSuccess) {
-                taskRepo.updateTaskStatus(
-                    taskId = task.id,
-                    newStatus = "PITCHED",
-                    newLog = "Follow-up sent after 3+ days with no reply."
-                )
-            } else {
-                taskRepo.updateTaskStatus(
-                    taskId = task.id,
-                    newStatus = "RUNNING",
-                    newLog = "Follow-up email failed: ${result.exceptionOrNull()?.message ?: "Unknown error"}"
-                )
-            }
-        }
-    }
-
-    private fun buildFollowUpBody(task: Task): String {
-        val clientName = task.client.ifBlank { "there" }
-        return """
-Hi $clientName,
-
-Just checking in to see if you saw my previous email. I know things get busy, but I wanted to circle back because I think there may be value in a quick SEO audit for your site.
-
-I’d be happy to share a brief rundown of the biggest technical and content gaps, and I can also suggest a few practical fixes that would improve rankings and conversions.
-
-If this is helpful, I’d be glad to send over a quick example audit and a short action plan.
-
-Best,
-AutoFreelancer AI
-        """.trimIndent()
     }
 
     private suspend fun executeTaskAutonomously(
@@ -333,27 +276,24 @@ AutoFreelancer AI
         aiService: AiOrchestrationService,
         replyRateRepository: ReplyRateRepository,
         pricingEngine: DynamicPricingEngine,
-        searchService: SearchProspectService,
-        emailService: BrevoEmailService
+        emailService: BrevoEmailService,
+        abTestingEngine: AbTestingEngine
     ) {
         val settings = settingsRepo.settingsFlow.value
         taskRepo.updateTaskStatus(
             taskId = task.id,
             newStatus = "RUNNING",
-            newLog = "⚡ [Auto-Pilot] Autonomously executing task approval & deliverable synthesis..."
+            newLog = "Auto-pilot: Executing task '${task.title}' autonomously..."
         )
+        LiveWorkerLogStore.record(task.workerName, "Auto-pilot: Executing task '${task.title}' autonomously...")
 
-        val searchResult = searchService.searchWithFallback(
-            query = "SEO audit ${task.title}",
-            serperKey = settings.serperApiKey,
-            tavilyKey = settings.tavilyApiKey
-        )
+        var targetEmail = task.clientEmail.trim()
+        var targetWebsite = extractWebsiteUrl(task.details)
 
         val outreachTone = replyRateRepository.bestPerformingTone()
-        val targetWebsite = searchResult.leads.firstOrNull()?.let(CompetitorSpyPrompt::websiteFor).orEmpty()
         val pricing = pricingEngine.decide(
-            website = targetWebsite,
-            context = "${task.client}\n${task.title}\n${task.details}",
+            website = targetWebsite.ifBlank { task.title },
+            context = task.details,
             geminiApiKey = settings.geminiApiKey,
             openRouterApiKey = settings.openRouterApiKey,
             geminiModel = settings.geminiModel,
@@ -361,7 +301,8 @@ AutoFreelancer AI
         )
         val dynamicPaymentLink = pricingEngine.paymentLinkForAmount(settings.paymentLinkUrl, pricing.amount)
         LiveWorkerLogStore.record(task.workerName, "> Applying ${outreachTone.promptLabel} tone and $${pricing.amount} quote.")
-        LiveWorkerLogStore.record(task.workerName, "> Comparing client website with three likely competitors...")
+
+        val assignedVariant = abTestingEngine.selectVariant()
 
         val aiResult = aiService.generateTaskDeliverable(
             geminiApiKey = settings.geminiApiKey,
@@ -371,149 +312,106 @@ AutoFreelancer AI
             taskTitle = task.title,
             category = task.category,
             client = task.client,
-            workerName = task.workerName,
-            workerRole = task.workerRole,
-            leads = searchResult.leads,
+            workerName = task.workerName.ifBlank { "Apollo-Scout" },
+            workerRole = task.workerRole.ifBlank { "Growth Consultant" },
+            leads = emptyList(),
             paymentLinkUrl = dynamicPaymentLink,
             outreachTone = outreachTone,
             targetWebsite = targetWebsite,
-            dynamicPrice = pricing.amount
+            dynamicPrice = pricing.amount,
+            agencyName = settings.agencyName,
+            calendarBookingUrl = settings.bookingLinkUrl
         )
 
-        val deliverableContent = if (aiResult.isSuccess) {
-            aiResult.getOrThrow().content
-        } else {
-            val fallbackText = "Comprehensive SEO audit formulated for ${task.client}."
-            if (dynamicPaymentLink.isNotBlank()) {
-                "$fallbackText\n\nThe ${outreachTone.promptLabel.lowercase()} audit package is $${pricing.amount}. Complete payment here: $dynamicPaymentLink"
-            } else {
-                fallbackText
+        if (aiResult.isSuccess) {
+            val deliverableContent = aiResult.getOrThrow().content
+
+            taskRepo.updateTaskStatus(
+                taskId = task.id,
+                newStatus = "COMPLETED",
+                newLog = "Task completed autonomously. Deliverable prepared."
+            )
+            LiveWorkerLogStore.record(task.workerName, "> Task completed autonomously. Deliverable prepared.")
+
+            if (targetEmail.isBlank()) {
+                val extracted = BusinessEmailValidator.findIn(deliverableContent).orEmpty()
+                if (extracted.isNotBlank()) {
+                    targetEmail = extracted
+                }
             }
-        }
 
-        val deliverableSection = """
-        |========================================
-        |AI WORKER DELIVERABLE [AUTO-PILOT]
-        |========================================
-        |$deliverableContent
-        """.trimMargin()
+            if (targetWebsite.isBlank()) {
+                targetWebsite = extractWebsiteUrl(deliverableContent)
+            }
 
-        taskRepo.updateTaskExecution(
-            taskId = task.id,
-            newStatus = "COMPLETED",
-            appendDetails = deliverableSection,
-            newLog = "⚡ [Auto-Pilot] Deliverable autonomously synthesized and approved."
-        )
+            if (settings.isBrevoConfigured && targetEmail.isNotBlank()) {
+                LiveWorkerLogStore.record(task.workerName, "> Auto-pilot: Dispatching pitch to $targetEmail via Brevo...")
+                val websiteForAudit = if (targetWebsite.isNotBlank()) targetWebsite else "your website"
+                val miniAuditPoints = emailService.generateMiniAuditPoints(websiteForAudit)
+                val htmlContent = emailService.buildHtmlEmailBody(deliverableContent, miniAuditPoints)
 
-        val targetEmail = task.clientEmail.trim().takeIf(BusinessEmailValidator::isValid)
-            ?: searchResult.leads.firstNotNullOfOrNull { item ->
-                BusinessEmailValidator.findIn("${item.snippet}\n${item.title}")
-            }.orEmpty()
-
-        if (settings.isBrevoConfigured) {
-            if (targetEmail.isNotBlank()) {
-                val siteUrl = targetWebsite.ifBlank { task.client }
-                val miniAuditPoints = emailService.generateMiniAuditPoints(siteUrl)
-                val pitchBody = buildString {
-                    append("Hi ${task.client},\n\n")
-                    append("I took a quick look at your website and wanted to share a simple SEO snapshot.\n\n")
-                    append(deliverableContent)
-                    append("\n\nHere is a quick free audit of your site...\n")
-                    miniAuditPoints.forEachIndexed { index, point ->
-                        append("${index + 1}. $point\n")
-                    }
-                    append("\nThanks for your time. I’d be happy to walk through the main opportunities with you.\n")
+                val subjectLine = if (assignedVariant == "VARIANT_B") {
+                    "Growth audit & technical roadmap for ${task.client.ifBlank { "your brand" }}"
+                } else {
+                    "Quick SEO audit notes for ${task.client.ifBlank { "your team" }}"
                 }
 
-                val htmlContent = emailService.buildHtmlEmailBody(pitchBody, miniAuditPoints)
                 val emailRes = emailService.sendEmail(
                     apiKey = settings.brevoApiKey,
                     toEmail = targetEmail,
-                    subject = "SEO Audit & Growth Proposal: ${task.title}",
-                    bodyText = pitchBody,
+                    subject = subjectLine,
+                    bodyText = deliverableContent,
                     htmlContent = htmlContent
                 )
                 if (emailRes.isSuccess) {
+                    abTestingEngine.recordSend(assignedVariant)
                     replyRateRepository.recordSentPitch(targetEmail, outreachTone)
-                    LiveWorkerLogStore.record(task.workerName, "> Pitch sent; reply-rate event recorded.")
+                    LiveWorkerLogStore.record(task.workerName, "> Pitch sent (Variant $assignedVariant); reply-rate event recorded.")
                     taskRepo.updateTaskStatus(
                         taskId = task.id,
                         newStatus = "PITCHED",
-                        newLog = "Email sent successfully via Brevo"
+                        newLog = "Pitch sent to $targetEmail via Brevo."
                     )
                 } else {
-                    val err = emailRes.exceptionOrNull()?.message ?: "Unknown delivery error"
-                    taskRepo.updateTaskStatus(
-                        taskId = task.id,
-                        newStatus = "RUNNING",
-                        newLog = "Brevo delivery error: $err"
-                    )
+                    val errMsg = emailRes.exceptionOrNull()?.message ?: "Unknown Brevo error"
+                    LiveWorkerLogStore.record(task.workerName, "> Email dispatch failed: $errMsg")
                 }
-            } else {
-                taskRepo.updateTaskStatus(
-                    taskId = task.id,
-                    newStatus = "RUNNING",
-                    newLog = "Error: Client email is missing. Please provide client email to send proposal."
-                )
+            } else if (settings.isBrevoConfigured && targetEmail.isBlank()) {
+                LiveWorkerLogStore.record(task.workerName, "> Notice: Lead email not found. Task completed without sending email.")
             }
-        }
 
-        val crmClient = CrmClient(
-            name = task.client,
-            company = task.category,
-            websiteUrl = searchResult.leads.firstOrNull()?.link.orEmpty(),
-            email = targetEmail,
-            status = "Pitched",
-            leadSource = "Auto-Pilot Worker",
-            pitchMessage = deliverableContent,
-            estimatedValue = pricing.amount.toDouble(),
-            leadScore = computeLeadScore(targetWebsite, pricing.amount, targetEmail),
-            pipelineStage = "Pitched",
-            lastContactedAt = System.currentTimeMillis(),
-            nextFollowUpAt = System.currentTimeMillis() + TimeUnit.DAYS.toMillis(3)
-        )
-        clientRepo.upsertClient(crmClient)
+            val autoCrmClient = CrmClient(
+                name = task.client.ifBlank { task.title.take(30) },
+                company = task.category,
+                websiteUrl = targetWebsite,
+                email = targetEmail,
+                status = "Pitched",
+                leadSource = "Auto-Pilot Worker",
+                pitchMessage = deliverableContent,
+                estimatedValue = pricing.amount.toDouble(),
+                leadScore = computeLeadScore(targetWebsite, pricing.amount.toDouble(), targetEmail),
+                pipelineStage = DealPipelineStage.PITCHED,
+                sequenceStage = FollowUpSequenceEngine.FollowUpStage.DAY_1.name,
+                abVariant = assignedVariant,
+                calendarBookingUrl = settings.bookingLinkUrl,
+                lastContactedAt = System.currentTimeMillis(),
+                nextFollowUpAt = System.currentTimeMillis() + TimeUnit.DAYS.toMillis(2)
+            )
+            clientRepo.upsertClient(autoCrmClient)
+        } else {
+            val errorMsg = aiResult.exceptionOrNull()?.message ?: "Unknown AI error"
+            taskRepo.updateTaskStatus(
+                taskId = task.id,
+                newStatus = "FAILED",
+                newLog = "Auto-pilot generation failed: $errorMsg"
+            )
+            LiveWorkerLogStore.record(task.workerName, "> Auto-pilot generation failed: $errorMsg")
+        }
     }
-}
 
-object AutoPilotScheduler {
-    private const val UNIQUE_WORK_NAME = "auto_pilot_work"
-    private const val UNIQUE_IMMEDIATE_WORK_NAME = "auto_pilot_work_immediate"
-
-    fun schedule(context: Context, enabled: Boolean) {
-        val workManager = WorkManager.getInstance(context)
-        if (!enabled) {
-            workManager.cancelUniqueWork(UNIQUE_WORK_NAME)
-            workManager.cancelUniqueWork(UNIQUE_IMMEDIATE_WORK_NAME)
-            Log.i("AutoPilotScheduler", "Auto-Pilot work cancelled.")
-            return
-        }
-
-        val constraints = Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.CONNECTED)
-            .build()
-
-        val periodicRequest = PeriodicWorkRequestBuilder<AutoPilotWorker>(
-            4, TimeUnit.HOURS
-        )
-            .setConstraints(constraints)
-            .build()
-
-        workManager.enqueueUniquePeriodicWork(
-            UNIQUE_WORK_NAME,
-            ExistingPeriodicWorkPolicy.UPDATE,
-            periodicRequest
-        )
-
-        val immediateRequest = OneTimeWorkRequestBuilder<AutoPilotWorker>()
-            .setConstraints(constraints)
-            .build()
-
-        workManager.enqueueUniqueWork(
-            UNIQUE_IMMEDIATE_WORK_NAME,
-            ExistingWorkPolicy.REPLACE,
-            immediateRequest
-        )
-        Log.i("AutoPilotScheduler", "Auto-Pilot periodic and immediate work scheduled.")
+    private fun extractWebsiteUrl(text: String): String {
+        val urlRegex = Regex("""https?://[a-zA-Z0-9.\-_]+(?:\.[a-zA-Z]{2,})+(?:/[^\s]*)?""")
+        val match = urlRegex.find(text)
+        return match?.value ?: ""
     }
 }

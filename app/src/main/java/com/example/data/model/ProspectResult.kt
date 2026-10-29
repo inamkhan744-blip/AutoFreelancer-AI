@@ -5,7 +5,8 @@ data class ProspectResult(
     val link: String,
     val snippet: String,
     val sourcePlatform: String,
-    val queryMatched: String = ""
+    val queryMatched: String = "",
+    val enrichment: LeadEnrichmentData? = null
 )
 
 enum class SearchProvider(val displayName: String) {
