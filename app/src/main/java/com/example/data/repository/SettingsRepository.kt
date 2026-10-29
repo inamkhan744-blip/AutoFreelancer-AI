@@ -2,15 +2,9 @@ package com.example.data.repository
 
 import android.content.Context
 import android.util.Log
-import com.google.firebase.Firebase
-import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.auth.auth
-import com.google.firebase.firestore.FirebaseFirestore
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.tasks.await
 
 data class AppSettings(
     val geminiApiKey: String = "",
@@ -68,9 +62,7 @@ data class AppSettings(
 }
 
 class SettingsRepository(
-    context: Context,
-    private val firestore: FirebaseFirestore? = runCatching { FirebaseFirestore.getInstance() }.getOrNull(),
-    private val auth: FirebaseAuth? = runCatching { Firebase.auth }.getOrNull()
+    context: Context
 ) {
     private val preferences = context.applicationContext.getSharedPreferences("autofreelancer_settings", Context.MODE_PRIVATE)
 
@@ -93,6 +85,17 @@ class SettingsRepository(
         }
 
         return AppSettings(
+            // Ab saari API keys local memory se load hongi
+            geminiApiKey = preferences.getString("gemini_api_key", "").orEmpty(),
+            openRouterApiKey = preferences.getString("openrouter_api_key", "").orEmpty(),
+            serperApiKey = preferences.getString("serper_api_key", "").orEmpty(),
+            tavilyApiKey = preferences.getString("tavily_api_key", "").orEmpty(),
+            elevenLabsApiKey = preferences.getString("elevenlabs_api_key", "").orEmpty(),
+            brevoApiKey = preferences.getString("brevo_api_key", "").orEmpty(),
+            paymentLinkUrl = preferences.getString("payment_link_url", "").orEmpty(),
+            twilioAccountSid = preferences.getString("twilio_account_sid", "").orEmpty(),
+            twilioAuthToken = preferences.getString("twilio_auth_token", "").orEmpty(),
+            
             geminiModel = activeGemini,
             openRouterModel = activeOpenRouter,
             autoPilotEnabled = preferences.getBoolean("auto_pilot_enabled", false),
@@ -111,68 +114,26 @@ class SettingsRepository(
         )
     }
 
+    // DashboardViewModel isko call karta hai, toh humein isay break nahi karna
     suspend fun loadCloudSettings() {
-        val userId = runCatching { auth?.currentUser?.uid }.getOrNull()
-        if (userId == null) {
-            clearCloudKeys()
-            return
-        }
-
-        val db = firestore
-        if (db == null) {
-            clearCloudKeys()
-            return
-        }
-
-        val document = try {
-            db.collection("users").document(userId).collection("settings").document("api_keys")
-                .get().await()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Log.w("SettingsRepository", "Cloud API keys unavailable; using empty keys: ${e.message}")
-            clearCloudKeys()
-            return
-        }
-
-        _settingsFlow.value = _settingsFlow.value.copy(
-            geminiApiKey = document.getString("gemini_api_key").orEmpty(),
-            openRouterApiKey = document.getString("openrouter_api_key").orEmpty(),
-            serperApiKey = document.getString("serper_api_key").orEmpty(),
-            tavilyApiKey = document.getString("tavily_api_key").orEmpty(),
-            elevenLabsApiKey = document.getString("elevenlabs_api_key").orEmpty(),
-            brevoApiKey = document.getString("brevo_api_key").orEmpty(),
-            paymentLinkUrl = document.getString("payment_link_url").orEmpty(),
-            bookingLinkUrl = document.getString("booking_link_url") ?: _settingsFlow.value.bookingLinkUrl,
-            agencyName = document.getString("agency_name") ?: _settingsFlow.value.agencyName,
-            agencyLogoUrl = document.getString("agency_logo_url") ?: _settingsFlow.value.agencyLogoUrl,
-            customEmailFooter = document.getString("custom_email_footer") ?: _settingsFlow.value.customEmailFooter,
-            twilioAccountSid = document.getString("twilio_account_sid").orEmpty(),
-            twilioAuthToken = document.getString("twilio_auth_token").orEmpty(),
-            twilioPhoneNumber = document.getString("twilio_phone_number") ?: _settingsFlow.value.twilioPhoneNumber
-        )
-    }
-
-    private fun clearCloudKeys() {
-        _settingsFlow.value = _settingsFlow.value.copy(
-            geminiApiKey = "",
-            openRouterApiKey = "",
-            serperApiKey = "",
-            tavilyApiKey = "",
-            elevenLabsApiKey = "",
-            brevoApiKey = "",
-            paymentLinkUrl = "",
-            twilioAccountSid = "",
-            twilioAuthToken = ""
-        )
+        // Ab cloud nahi, seedha local memory se load hoga
+        _settingsFlow.value = loadLocalSettings()
+        Log.d("SettingsRepository", "Loaded settings from local storage.")
     }
 
     suspend fun saveSettings(settings: AppSettings) {
-        val userId = auth?.currentUser?.uid
-            ?: throw IllegalStateException("Sign in before saving API keys to Firebase.")
-        val db = requireNotNull(firestore) { "Firestore is unavailable." }
-
+        // Ab yahan koi login check nahi hai. Seedha local memory mein save hoga.
         preferences.edit()
+            .putString("gemini_api_key", settings.geminiApiKey.trim())
+            .putString("openrouter_api_key", settings.openRouterApiKey.trim())
+            .putString("serper_api_key", settings.serperApiKey.trim())
+            .putString("tavily_api_key", settings.tavilyApiKey.trim())
+            .putString("elevenlabs_api_key", settings.elevenLabsApiKey.trim())
+            .putString("brevo_api_key", settings.brevoApiKey.trim())
+            .putString("payment_link_url", settings.paymentLinkUrl.trim())
+            .putString("twilio_account_sid", settings.twilioAccountSid.trim())
+            .putString("twilio_auth_token", settings.twilioAuthToken.trim())
+            
             .putString("gemini_model", settings.geminiModel.trim())
             .putString("openrouter_model", settings.openRouterModel.trim())
             .putBoolean("auto_pilot_enabled", settings.autoPilotEnabled)
@@ -186,26 +147,8 @@ class SettingsRepository(
             .putString("custom_email_footer", settings.customEmailFooter.trim())
             .putString("twilio_phone_number", settings.twilioPhoneNumber.trim())
             .apply()
-
-        db.collection("users").document(userId).collection("settings").document("api_keys")
-            .set(
-                mapOf(
-                    "gemini_api_key" to settings.geminiApiKey.trim(),
-                    "openrouter_api_key" to settings.openRouterApiKey.trim(),
-                    "serper_api_key" to settings.serperApiKey.trim(),
-                    "tavily_api_key" to settings.tavilyApiKey.trim(),
-                    "elevenLabs_api_key" to settings.elevenLabsApiKey.trim(),
-                    "brevo_api_key" to settings.brevoApiKey.trim(),
-                    "payment_link_url" to settings.paymentLinkUrl.trim(),
-                    "booking_link_url" to settings.bookingLinkUrl.trim(),
-                    "agency_name" to settings.agencyName.trim(),
-                    "agency_logo_url" to settings.agencyLogoUrl.trim(),
-                    "custom_email_footer" to settings.customEmailFooter.trim(),
-                    "twilio_account_sid" to settings.twilioAccountSid.trim(),
-                    "twilio_auth_token" to settings.twilioAuthToken.trim(),
-                    "twilio_phone_number" to settings.twilioPhoneNumber.trim()
-                )
-            ).await()
+            
         _settingsFlow.value = settings
+        Log.d("SettingsRepository", "Settings saved successfully to local storage.")
     }
 }
