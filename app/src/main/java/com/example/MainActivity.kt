@@ -38,7 +38,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.repository.ClientRepository
 import com.example.data.repository.InboxRepository
@@ -56,10 +55,6 @@ import com.example.ui.theme.AutoFreelancerTheme
 import com.example.ui.theme.CyberPrimary
 import com.example.ui.theme.CyberSecondary
 import com.example.ui.viewmodel.DashboardViewModel
-import com.google.firebase.Firebase
-import com.google.firebase.auth.auth
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.tasks.await
 
 class MainActivity : ComponentActivity() {
     private var isAppReady by mutableStateOf(false)
@@ -73,34 +68,9 @@ class MainActivity : ComponentActivity() {
             Log.w("MainActivity", "EdgeToEdge non-fatal notice: ${e.message}")
         }
 
-        // Asynchronous, resilient startup flow
-        lifecycleScope.launch {
-            try {
-                val auth = runCatching { Firebase.auth }.getOrNull()
-                if (auth != null) {
-                    val user = auth.currentUser
-                    if (user == null) {
-                        runCatching {
-                            auth.signInAnonymously().await()
-                            Log.d("MainActivity", "Signed in anonymously: ${auth.currentUser?.uid}")
-                        }.onFailure { err ->
-                            Log.i("MainActivity", "Anonymous auth unprovisioned or offline, continuing in Guest Mode: ${err.message}")
-                            AppStartupState.isGuestMode = true
-                        }
-                    } else {
-                        Log.d("MainActivity", "Active session restored: ${user.uid}")
-                    }
-                } else {
-                    AppStartupState.isGuestMode = true
-                }
-            } catch (e: Throwable) {
-                Log.w("MainActivity", "Auth initialization warning: ${e.message}; entering Guest Mode")
-                AppStartupState.isGuestMode = true
-            } finally {
-                // Ensure UI is ALWAYS released to render
-                isAppReady = true
-            }
-        }
+        // PERMANENT FIX: Bypass all Firebase Auth and Login
+        // Set ready to true immediately to open the app
+        isAppReady = true
 
         setContent {
             AutoFreelancerTheme {
