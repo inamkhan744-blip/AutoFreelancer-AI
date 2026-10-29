@@ -25,6 +25,7 @@ import com.example.data.service.DynamicPricingEngine
 import com.example.data.service.SearchProspectService
 import com.example.util.BusinessEmailValidator
 import com.example.util.LiveWorkerLogStore
+import com.example.util.ProspectDeduplicator
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
@@ -129,8 +130,8 @@ class AutoPilotWorker(
                     val dynamicPaymentLink = pricingEngine.paymentLinkForAmount(settings.paymentLinkUrl, pricing.amount)
                     LiveWorkerLogStore.record("Apollo-Scout", "> ${prospect.sourcePlatform}: selected $${pricing.amount}; tone ${outreachTone.promptLabel}.")
 
-                    val prompt = "Write a persuasive personalized pitch.\nTitle: ${prospect.title}\nContext: ${prospect.snippet}\nClient website: ${targetWebsite.ifBlank { "not provided" }}\nSource platform: ${prospect.sourcePlatform}"
-                    val systemPrompt = "You are Apollo-Scout. Compare the client's site with three plausible direct competitors and write in a ${outreachTone.promptLabel.lowercase()} tone. Be explicit, concise, and conversion-focused."
+                    val prompt = "Write a persuasive personalized pitch.\nTitle: ${prospect.title}\nContext: ${prospect.snippet}\nClient website: ${targetWebsite.ifBlank { "not provided" }}\nSource: ${prospect.sourcePlatform}\n"
+                    val systemPrompt = "You are Apollo-Scout. Compare the client's site with three plausible direct competitors and write in a ${outreachTone.promptLabel.lowercase()} tone. Be explicit, concise, and persuasive."
                     LiveWorkerLogStore.record("Apollo-Scout", "> Comparing three likely competitors and generating price...")
 
                     val aiRes = aiService.generateContentWithFallback(
