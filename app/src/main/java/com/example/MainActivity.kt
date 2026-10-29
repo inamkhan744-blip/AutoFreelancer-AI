@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -32,6 +33,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -55,94 +57,79 @@ import com.example.ui.theme.CyberPrimary
 import com.example.ui.theme.CyberSecondary
 import com.example.ui.viewmodel.DashboardViewModel
 import com.google.firebase.Firebase
-import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.auth
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 
 class MainActivity : ComponentActivity() {
-    private var isAuthenticated by mutableStateOf(false)
-    private var startupError by mutableStateOf(AppStartupState.errorMessage)
+    private var isAppReady by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         try {
             enableEdgeToEdge()
-            lifecycleScope.launch {
-                val auth = Firebase.auth
-                ensureFirebaseAuthReady(auth)
-                isAuthenticated = auth.currentUser != null
+        } catch (e: Throwable) {
+            Log.w("MainActivity", "EdgeToEdge non-fatal notice: ${e.message}")
+        }
+
+        // Asynchronous, resilient startup flow
+        lifecycleScope.launch {
+            try {
+                val auth = runCatching { Firebase.auth }.getOrNull()
+                if (auth != null) {
+                    val user = auth.currentUser
+                    if (user == null) {
+                        runCatching {
+                            auth.signInAnonymously().await()
+                            Log.d("MainActivity", "Signed in anonymously: ${auth.currentUser?.uid}")
+                        }.onFailure { err ->
+                            Log.i("MainActivity", "Anonymous auth unprovisioned or offline, continuing in Guest Mode: ${err.message}")
+                            AppStartupState.isGuestMode = true
+                        }
+                    } else {
+                        Log.d("MainActivity", "Active session restored: ${user.uid}")
+                    }
+                } else {
+                    AppStartupState.isGuestMode = true
+                }
+            } catch (e: Throwable) {
+                Log.w("MainActivity", "Auth initialization warning: ${e.message}; entering Guest Mode")
+                AppStartupState.isGuestMode = true
+            } finally {
+                // Ensure UI is ALWAYS released to render
+                isAppReady = true
             }
-        } catch (error: Exception) {
-            showStartupError(error)
         }
 
         setContent {
             AutoFreelancerTheme {
-                val error = startupError
-                if (error != null) {
-                    StartupErrorScreen(error)
-                } else if (isAuthenticated) {
+                if (isAppReady) {
                     AppRootContent()
                 } else {
-                    Surface(modifier = Modifier.fillMaxSize()) {
-                        Column(
-                            modifier = Modifier.fillMaxSize().padding(24.dp),
-                            verticalArrangement = Arrangement.Center
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = MaterialTheme.colorScheme.background
+                    ) {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Text("Connecting to secure server...", style = MaterialTheme.typography.titleMedium)
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(16.dp)
+                            ) {
+                                CircularProgressIndicator(color = CyberPrimary)
+                                Text(
+                                    text = "Initializing Autonomous Agency Engine...",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
                 }
             }
-        }
-    }
-
-    private suspend fun ensureFirebaseAuthReady(auth: FirebaseAuth) {
-        try {
-            val currentUser = auth.currentUser
-            if (currentUser != null) {
-                val isGoogleUser = currentUser.providerData.any { it.providerId == GoogleAuthProvider.PROVIDER_ID }
-                Log.d("Auth", "Authenticated user already available: ${currentUser.uid}, google=${isGoogleUser}")
-                return
-            }
-
-            val result = auth.signInAnonymously().await()
-            val uid = result.user?.uid
-            Log.d("Auth", "Anonymous login successful for uid: $uid")
-            if (uid == null) {
-                throw IllegalStateException("Firebase anonymous sign-in returned no user.")
-            }
-        } catch (error: Exception) {
-            Log.e("Auth", "Firebase auth initialization failed before app boot", error)
-            showStartupError(error)
-        }
-    }
-
-    private fun showStartupError(error: Throwable) {
-        startupError = error.localizedMessage ?: "App initialization failed."
-        AppStartupState.recordFailure(error)
-    }
-}
-
-@Composable
-private fun StartupErrorScreen(message: String) {
-    Surface(
-        modifier = Modifier.fillMaxSize(),
-        color = MaterialTheme.colorScheme.background
-    ) {
-        Column(
-            modifier = Modifier.fillMaxSize().padding(24.dp),
-            verticalArrangement = Arrangement.Center
-        ) {
-            Text("App initialization failed", style = MaterialTheme.typography.titleLarge)
-            Text(
-                text = message,
-                modifier = Modifier.padding(top = 8.dp),
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
         }
     }
 }

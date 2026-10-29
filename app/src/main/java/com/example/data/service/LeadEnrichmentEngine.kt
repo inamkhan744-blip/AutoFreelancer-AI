@@ -187,8 +187,10 @@ class LeadEnrichmentEngine(
     }
 
     private fun fallbackEnrichment(url: String): LeadEnrichmentData {
-        val domain = url.substringAfter("://").substringBefore("/").replace("www.", "")
-        val brandGuess = domain.substringBefore(".").replaceFirstChar { it.uppercase() }
+        val domain = runCatching {
+            url.substringAfter("://").substringBefore("/").replace("www.", "")
+        }.getOrDefault("domain")
+        val brandGuess = domain.substringBefore(".").ifBlank { "Client" }.replaceFirstChar { it.uppercase() }
         return LeadEnrichmentData(
             url = url,
             pageTitle = "$brandGuess Website",

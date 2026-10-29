@@ -13,10 +13,14 @@ data class LeadEnrichmentData(
     val rawH1: String = "",
     val isScrapedSuccessfully: Boolean = false
 ) {
-    val siteTitle: String get() = pageTitle
+    val siteTitle: String get() = pageTitle.ifBlank { "Website" }
     val techStack: List<String> get() = detectedTechStack
-    val nicheSummary: String get() = productOrServiceSummary.ifBlank { detectedKeywords.take(2).joinToString(", ") }
-    val customFirstLineHook: String get() = "I was looking at $url and noticed your focus on ${nicheSummary.ifBlank { pageTitle.take(30) }}..."
+    val nicheSummary: String get() = productOrServiceSummary.ifBlank { detectedKeywords.take(2).joinToString(", ") }.ifBlank { "Online Business" }
+    val customFirstLineHook: String get() = if (url.isNotBlank()) {
+        "I was looking at $url and noticed your focus on ${nicheSummary.take(40)}..."
+    } else {
+        "I was reviewing your online presence and noticed your focus on ${nicheSummary.take(40)}..."
+    }
 
     fun toSummaryPrompt(): String {
         val techStr = if (detectedTechStack.isNotEmpty()) "Tech Stack: ${detectedTechStack.joinToString(", ")}" else ""
@@ -45,12 +49,14 @@ data class LeadEnrichmentData(
     }
 
     companion object {
-        fun fromJson(json: JSONObject): LeadEnrichmentData {
+        fun fromJson(json: JSONObject?): LeadEnrichmentData {
+            if (json == null) return LeadEnrichmentData()
             val tech = mutableListOf<String>()
             val techArr = json.optJSONArray("detectedTechStack")
             if (techArr != null) {
                 for (i in 0 until techArr.length()) {
-                    tech.add(techArr.optString(i))
+                    val item = techArr.optString(i, "")
+                    if (item.isNotBlank()) tech.add(item)
                 }
             }
 
@@ -58,7 +64,8 @@ data class LeadEnrichmentData(
             val kwArr = json.optJSONArray("detectedKeywords")
             if (kwArr != null) {
                 for (i in 0 until kwArr.length()) {
-                    kw.add(kwArr.optString(i))
+                    val item = kwArr.optString(i, "")
+                    if (item.isNotBlank()) kw.add(item)
                 }
             }
 
@@ -74,21 +81,22 @@ data class LeadEnrichmentData(
             )
         }
 
-        fun fromMap(map: Map<String, Any>): LeadEnrichmentData {
+        fun fromMap(map: Map<String, Any?>?): LeadEnrichmentData {
+            if (map == null) return LeadEnrichmentData()
             @Suppress("UNCHECKED_CAST")
-            val tech = (map["detectedTechStack"] as? List<String>) ?: emptyList()
+            val tech = (map["detectedTechStack"] as? List<*>)?.mapNotNull { it?.toString() } ?: emptyList()
             @Suppress("UNCHECKED_CAST")
-            val kw = (map["detectedKeywords"] as? List<String>) ?: emptyList()
+            val kw = (map["detectedKeywords"] as? List<*>)?.mapNotNull { it?.toString() } ?: emptyList()
 
             return LeadEnrichmentData(
-                url = map["url"] as? String ?: "",
-                pageTitle = map["pageTitle"] as? String ?: "",
-                metaDescription = map["metaDescription"] as? String ?: "",
+                url = map["url"]?.toString().orEmpty(),
+                pageTitle = map["pageTitle"]?.toString().orEmpty(),
+                metaDescription = map["metaDescription"]?.toString().orEmpty(),
                 detectedTechStack = tech,
                 detectedKeywords = kw,
-                productOrServiceSummary = map["productOrServiceSummary"] as? String ?: "",
-                rawH1 = map["rawH1"] as? String ?: "",
-                isScrapedSuccessfully = map["isScrapedSuccessfully"] as? Boolean ?: false
+                productOrServiceSummary = map["productOrServiceSummary"]?.toString().orEmpty(),
+                rawH1 = map["rawH1"]?.toString().orEmpty(),
+                isScrapedSuccessfully = (map["isScrapedSuccessfully"] as? Boolean) ?: false
             )
         }
     }

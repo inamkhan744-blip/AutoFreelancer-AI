@@ -16,8 +16,9 @@ object DealPipelineStage {
 
     val ALL = listOf(NEW, PITCHED, FOLLOW_UP, INTERESTED, CALL_BOOKED, PROPOSAL_SENT, WON, LOST)
 
-    fun displayName(stage: String): String {
-        return when (stage.uppercase()) {
+    fun displayName(stage: String?): String {
+        if (stage.isNullOrBlank()) return "Pitched"
+        return when (stage.trim().uppercase()) {
             NEW -> "New Lead"
             PITCHED -> "Pitched"
             FOLLOW_UP -> "Follow-Up"
@@ -30,7 +31,8 @@ object DealPipelineStage {
         }
     }
 
-    fun normalize(raw: String): String {
+    fun normalize(raw: String?): String {
+        if (raw.isNullOrBlank()) return PITCHED
         val upper = raw.trim().uppercase()
         return when (upper) {
             "NEW" -> NEW
@@ -48,7 +50,7 @@ object DealPipelineStage {
 
 data class CrmClient(
     val id: String = UUID.randomUUID().toString(),
-    val name: String,
+    val name: String = "Prospect Client",
     val company: String = "",
     val websiteUrl: String = "",
     val email: String = "",
@@ -137,30 +139,36 @@ data class CrmClient(
     }
 
     companion object {
-        fun fromJson(json: JSONObject): CrmClient {
-            val stage = DealPipelineStage.normalize(json.optString("pipelineStage", json.optString("status", DealPipelineStage.PITCHED)))
+        fun fromJson(json: JSONObject?): CrmClient {
+            if (json == null) return CrmClient()
+            val rawStage = json.optString("pipelineStage", json.optString("status", DealPipelineStage.PITCHED))
+            val stage = DealPipelineStage.normalize(rawStage)
+
+            val estVal = json.optDouble("estimatedValue", 0.0)
+            val propPrice = json.optDouble("proposalPrice", estVal)
+
             return CrmClient(
-                id = json.optString("id", UUID.randomUUID().toString()),
-                name = json.optString("name", "Prospect Client"),
+                id = json.optString("id", UUID.randomUUID().toString()).ifBlank { UUID.randomUUID().toString() },
+                name = json.optString("name", "Prospect Client").ifBlank { "Prospect Client" },
                 company = json.optString("company", ""),
                 websiteUrl = json.optString("websiteUrl", ""),
                 email = json.optString("email", ""),
                 phone = json.optString("phone", ""),
-                status = json.optString("status", stage),
-                leadSource = json.optString("leadSource", "Lead Scout"),
+                status = json.optString("status", stage).ifBlank { stage },
+                leadSource = json.optString("leadSource", "Lead Scout").ifBlank { "Lead Scout" },
                 pitchMessage = json.optString("pitchMessage", ""),
                 seoReport = json.optString("seoReport", ""),
-                estimatedValue = json.optDouble("estimatedValue", 0.0),
+                estimatedValue = if (estVal.isNaN()) 0.0 else estVal,
                 leadScore = json.optInt("leadScore", 0),
                 pipelineStage = stage,
-                sequenceStage = json.optString("sequenceStage", "DAY_1"),
-                abVariant = json.optString("abVariant", "VARIANT_A"),
+                sequenceStage = json.optString("sequenceStage", "DAY_1").ifBlank { "DAY_1" },
+                abVariant = json.optString("abVariant", "VARIANT_A").ifBlank { "VARIANT_A" },
                 calendarBookingUrl = json.optString("calendarBookingUrl", ""),
                 proposalHtml = json.optString("proposalHtml", ""),
-                proposalPrice = json.optDouble("proposalPrice", json.optDouble("estimatedValue", 0.0)),
-                paymentStatus = json.optString("paymentStatus", "UNPAID"),
+                proposalPrice = if (propPrice.isNaN()) 0.0 else propPrice,
+                paymentStatus = json.optString("paymentStatus", "UNPAID").ifBlank { "UNPAID" },
                 paymentLink = json.optString("paymentLink", ""),
-                portalToken = json.optString("portalToken", UUID.randomUUID().toString().take(12)),
+                portalToken = json.optString("portalToken", UUID.randomUUID().toString().take(12)).ifBlank { UUID.randomUUID().toString().take(12) },
                 enrichmentNotes = json.optString("enrichmentNotes", ""),
                 lastContactedAt = json.optLong("lastContactedAt", System.currentTimeMillis()),
                 nextFollowUpAt = json.optLong("nextFollowUpAt", System.currentTimeMillis() + TimeUnit.DAYS.toMillis(3)),
@@ -169,34 +177,51 @@ data class CrmClient(
             )
         }
 
-        fun fromMap(id: String, map: Map<String, Any>): CrmClient {
-            val rawStage = map["pipelineStage"] as? String ?: (map["status"] as? String ?: DealPipelineStage.PITCHED)
+        fun fromMap(id: String?, map: Map<String, Any?>?): CrmClient {
+            if (map == null) return CrmClient(id = id ?: UUID.randomUUID().toString())
+
+            val rawStage = map["pipelineStage"]?.toString() ?: (map["status"]?.toString() ?: DealPipelineStage.PITCHED)
             val stage = DealPipelineStage.normalize(rawStage)
-            val estVal = (map["estimatedValue"] as? Number)?.toDouble() ?: 0.0
+
+            val estVal = when (val v = map["estimatedValue"]) {
+                is Number -> v.toDouble()
+                is String -> v.toDoubleOrNull() ?: 0.0
+                else -> 0.0
+            }
+            val propPrice = when (val p = map["proposalPrice"]) {
+                is Number -> p.toDouble()
+                is String -> p.toDoubleOrNull() ?: estVal
+                else -> estVal
+            }
+            val leadScore = when (val s = map["leadScore"]) {
+                is Number -> s.toInt()
+                is String -> s.toIntOrNull() ?: 0
+                else -> 0
+            }
 
             return CrmClient(
-                id = id,
-                name = map["name"] as? String ?: "Prospect Client",
-                company = map["company"] as? String ?: "",
-                websiteUrl = map["websiteUrl"] as? String ?: "",
-                email = map["email"] as? String ?: "",
-                phone = map["phone"] as? String ?: "",
-                status = map["status"] as? String ?: stage,
-                leadSource = map["leadSource"] as? String ?: "Lead Scout",
-                pitchMessage = map["pitchMessage"] as? String ?: "",
-                seoReport = map["seoReport"] as? String ?: "",
-                estimatedValue = estVal,
-                leadScore = (map["leadScore"] as? Number)?.toInt() ?: 0,
+                id = id?.ifBlank { null } ?: UUID.randomUUID().toString(),
+                name = map["name"]?.toString()?.ifBlank { null } ?: "Prospect Client",
+                company = map["company"]?.toString().orEmpty(),
+                websiteUrl = map["websiteUrl"]?.toString().orEmpty(),
+                email = map["email"]?.toString().orEmpty(),
+                phone = map["phone"]?.toString().orEmpty(),
+                status = map["status"]?.toString()?.ifBlank { null } ?: stage,
+                leadSource = map["leadSource"]?.toString()?.ifBlank { null } ?: "Lead Scout",
+                pitchMessage = map["pitchMessage"]?.toString().orEmpty(),
+                seoReport = map["seoReport"]?.toString().orEmpty(),
+                estimatedValue = if (estVal.isNaN()) 0.0 else estVal,
+                leadScore = leadScore,
                 pipelineStage = stage,
-                sequenceStage = map["sequenceStage"] as? String ?: "DAY_1",
-                abVariant = map["abVariant"] as? String ?: "VARIANT_A",
-                calendarBookingUrl = map["calendarBookingUrl"] as? String ?: "",
-                proposalHtml = map["proposalHtml"] as? String ?: "",
-                proposalPrice = (map["proposalPrice"] as? Number)?.toDouble() ?: estVal,
-                paymentStatus = map["paymentStatus"] as? String ?: "UNPAID",
-                paymentLink = map["paymentLink"] as? String ?: "",
-                portalToken = map["portalToken"] as? String ?: UUID.randomUUID().toString().take(12),
-                enrichmentNotes = map["enrichmentNotes"] as? String ?: "",
+                sequenceStage = map["sequenceStage"]?.toString()?.ifBlank { null } ?: "DAY_1",
+                abVariant = map["abVariant"]?.toString()?.ifBlank { null } ?: "VARIANT_A",
+                calendarBookingUrl = map["calendarBookingUrl"]?.toString().orEmpty(),
+                proposalHtml = map["proposalHtml"]?.toString().orEmpty(),
+                proposalPrice = if (propPrice.isNaN()) 0.0 else propPrice,
+                paymentStatus = map["paymentStatus"]?.toString()?.ifBlank { null } ?: "UNPAID",
+                paymentLink = map["paymentLink"]?.toString().orEmpty(),
+                portalToken = map["portalToken"]?.toString()?.ifBlank { null } ?: UUID.randomUUID().toString().take(12),
+                enrichmentNotes = map["enrichmentNotes"]?.toString().orEmpty(),
                 lastContactedAt = (map["lastContactedAt"] as? Number)?.toLong() ?: System.currentTimeMillis(),
                 nextFollowUpAt = (map["nextFollowUpAt"] as? Number)?.toLong() ?: (System.currentTimeMillis() + TimeUnit.DAYS.toMillis(3)),
                 createdAt = (map["createdAt"] as? Number)?.toLong() ?: System.currentTimeMillis(),

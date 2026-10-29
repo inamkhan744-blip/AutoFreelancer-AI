@@ -1,6 +1,7 @@
 package com.example.data.service
 
 import android.util.Log
+import com.example.data.model.LeadEnrichmentData
 import com.example.data.model.ProspectResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -29,13 +30,18 @@ class SearchProspectService(
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
     suspend fun enrichLead(prospect: ProspectResult): ProspectResult = withContext(Dispatchers.IO) {
-        val enrichment = enrichmentEngine.enrichWebsite(prospect.link)
+        val link = prospect.link.trim()
+        val enrichment = runCatching { enrichmentEngine.enrichWebsite(link) }
+            .getOrDefault(LeadEnrichmentData(url = link))
         prospect.copy(enrichment = enrichment)
     }
 
-    suspend fun enrichLeads(leads: List<ProspectResult>): List<ProspectResult> = withContext(Dispatchers.IO) {
+    suspend fun enrichLeads(leads: List<ProspectResult>?): List<ProspectResult> = withContext(Dispatchers.IO) {
+        if (leads.isNullOrEmpty()) return@withContext emptyList()
         leads.map { lead ->
-            val enrichment = enrichmentEngine.enrichWebsite(lead.link)
+            val link = lead.link.trim()
+            val enrichment = runCatching { enrichmentEngine.enrichWebsite(link) }
+                .getOrDefault(LeadEnrichmentData(url = link))
             lead.copy(enrichment = enrichment)
         }
     }
