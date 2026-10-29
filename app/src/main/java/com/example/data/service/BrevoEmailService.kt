@@ -32,13 +32,59 @@ class BrevoEmailService(
     private val emailEndpoint = "https://api.brevo.com/v3/smtp/email"
     private val accountEndpoint = "https://api.brevo.com/v3/account"
 
+    fun generateMiniAuditPoints(siteUrl: String): List<String> {
+        val cleanSite = siteUrl.trim().ifBlank { "your website" }
+        val normalized = if (cleanSite.startsWith("http://", true) || cleanSite.startsWith("https://", true)) {
+            cleanSite
+        } else {
+            "https://$cleanSite"
+        }
+
+        return listOf(
+            "Mobile UX & speed: check Core Web Vitals and compress oversized images or scripts on $normalized.",
+            "On-page SEO: tighten title tags, H1s, meta descriptions, and internal linking around the main services pages.",
+            "Technical SEO: audit indexability, crawl errors, schema markup, and internal links to make the site easier for Google to understand."
+        )
+    }
+
+    fun buildHtmlEmailBody(bodyText: String, miniAuditPoints: List<String> = emptyList()): String {
+        val cleanBody = bodyText
+            .replace("\r\n", "\n")
+            .replace("\n", "<br><br>")
+        val auditHtml = if (miniAuditPoints.isNotEmpty()) {
+            val items = miniAuditPoints.joinToString("") { point ->
+                "<li style=\"margin: 0 0 8px; color: #1f2937;\">$point</li>"
+            }
+            """
+            <div style="margin-top: 24px; padding: 16px 18px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px;">
+              <p style="margin: 0 0 12px; font-size: 16px; color: #0f172a; font-weight: 700;">Here is a quick free audit of your site...</p>
+              <ul style="margin: 0; padding-left: 20px; color: #1f2937;">$items</ul>
+            </div>
+            """.trimIndent()
+        } else {
+            ""
+        }
+
+        return """
+        <html>
+          <body style="font-family: Arial, Helvetica, sans-serif; line-height: 1.6; color: #111827; margin: 0; padding: 24px; background: #ffffff;">
+            <div style="max-width: 700px; margin: 0 auto;">
+              <p style="margin: 0 0 16px; font-size: 15px;">$cleanBody</p>
+              $auditHtml
+            </div>
+          </body>
+        </html>
+        """.trimIndent()
+    }
+
     suspend fun sendEmail(
         apiKey: String,
         toEmail: String,
         subject: String,
         bodyText: String,
         fromEmail: String = VERIFIED_FROM_EMAIL,
-        attachments: List<EmailAttachment> = emptyList()
+        attachments: List<EmailAttachment> = emptyList(),
+        htmlContent: String? = null
     ): Result<EmailSendResult> = withContext(Dispatchers.IO) {
         val cleanKey = apiKey.trim()
         val cleanTo = toEmail.trim()
@@ -62,6 +108,9 @@ class BrevoEmailService(
                 put("to", JSONArray().put(JSONObject().put("email", cleanTo)))
                 put("subject", subject.ifBlank { "SEO Audit & Growth Proposal" })
                 put("textContent", bodyText)
+                if (!htmlContent.isNullOrBlank()) {
+                    put("htmlContent", htmlContent)
+                }
                 if (attachments.isNotEmpty()) {
                     put("attachment", JSONArray().apply {
                         attachments.forEach { attachment ->
