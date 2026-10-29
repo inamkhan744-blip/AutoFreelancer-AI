@@ -104,8 +104,8 @@ class ClientRepository(
         val existing = localClientsFlow.value.toMutableList()
         val index = existing.indexOfFirst {
             it.id == client.id ||
-            (client.email.isNotBlank() && it.email.equals(client.email, ignoreCase = true)) ||
-            (client.websiteUrl.isNotBlank() && it.websiteUrl.equals(client.websiteUrl, ignoreCase = true))
+                (client.email.isNotBlank() && it.email.equals(client.email, ignoreCase = true)) ||
+                (client.websiteUrl.isNotBlank() && it.websiteUrl.equals(client.websiteUrl, ignoreCase = true))
         }
 
         val finalClient = if (index != -1) {
@@ -114,6 +114,10 @@ class ClientRepository(
                 id = old.id,
                 seoReport = if (client.seoReport.isNotBlank()) client.seoReport else old.seoReport,
                 pitchMessage = if (client.pitchMessage.isNotBlank()) client.pitchMessage else old.pitchMessage,
+                leadScore = if (client.leadScore > 0) client.leadScore else old.leadScore,
+                pipelineStage = if (client.pipelineStage.isNotBlank()) client.pipelineStage else old.pipelineStage,
+                lastContactedAt = if (client.lastContactedAt > 0L) client.lastContactedAt else old.lastContactedAt,
+                nextFollowUpAt = if (client.nextFollowUpAt > 0L) client.nextFollowUpAt else old.nextFollowUpAt,
                 updatedAt = System.currentTimeMillis()
             )
         } else {
@@ -127,7 +131,6 @@ class ClientRepository(
         }
         saveLocalClients(existing)
 
-        // Sync to Firestore if signed in
         val uid = auth?.currentUser?.uid
         if (db != null && uid != null) {
             try {
@@ -147,13 +150,25 @@ class ClientRepository(
         val validStatus = when (newStatus.lowercase()) {
             "paid" -> "Paid"
             "completed" -> "Completed"
+            "interested" -> "Interested"
+            "followup", "follow-up" -> "FollowUp"
             else -> "Pitched"
         }
 
         val existing = localClientsFlow.value.toMutableList()
         val index = existing.indexOfFirst { it.id == clientId }
         if (index != -1) {
-            val updated = existing[index].copy(status = validStatus, updatedAt = System.currentTimeMillis())
+            val updated = existing[index].copy(
+                status = validStatus,
+                pipelineStage = validStatus,
+                updatedAt = System.currentTimeMillis(),
+                lastContactedAt = if (validStatus != "Pitched") System.currentTimeMillis() else existing[index].lastContactedAt,
+                nextFollowUpAt = when (validStatus) {
+                    "Interested" -> System.currentTimeMillis() + 1000L * 60 * 60 * 24 * 7
+                    "FollowUp" -> System.currentTimeMillis() + 1000L * 60 * 60 * 24 * 3
+                    else -> existing[index].nextFollowUpAt
+                }
+            )
             existing[index] = updated
             saveLocalClients(existing)
 
@@ -162,7 +177,15 @@ class ClientRepository(
                 try {
                     db.collection("users").document(uid).collection("clients")
                         .document(clientId)
-                        .update("status", validStatus, "updatedAt", System.currentTimeMillis())
+                        .update(
+                            mapOf(
+                                "status" to validStatus,
+                                "pipelineStage" to validStatus,
+                                "updatedAt" to System.currentTimeMillis(),
+                                "lastContactedAt" to updated.lastContactedAt,
+                                "nextFollowUpAt" to updated.nextFollowUpAt
+                            )
+                        )
                         .await()
                 } catch (e: Exception) {
                     Log.w(tag, "Firestore status update failed: ${e.message}")
