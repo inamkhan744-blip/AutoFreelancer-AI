@@ -14,8 +14,8 @@ import androidx.work.WorkerParameters
 import com.example.data.model.CrmClient
 import com.example.data.model.OutreachTone
 import com.example.data.model.Task
-import com.example.data.repository.ReplyRateRepository
 import com.example.data.repository.ClientRepository
+import com.example.data.repository.ReplyRateRepository
 import com.example.data.repository.SettingsRepository
 import com.example.data.repository.TaskRepository
 import com.example.data.service.AiOrchestrationService
@@ -26,7 +26,6 @@ import com.example.data.service.SearchProspectService
 import com.example.util.BusinessEmailValidator
 import com.example.util.LiveWorkerLogStore
 import com.example.util.ProspectDeduplicator
-
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import java.util.concurrent.TimeUnit
@@ -66,7 +65,6 @@ class AutoPilotWorker(
             val replyRateRepository = ReplyRateRepository()
             val pricingEngine = DynamicPricingEngine(aiService)
 
-            // 1. Process all currently PENDING tasks automatically
             val currentTasks = taskRepo.observeTasks().first()
             val pendingTasks = currentTasks.filter { it.status == "PENDING" }
 
@@ -86,7 +84,8 @@ class AutoPilotWorker(
                 )
             }
 
-            // 2. Discover new leads only when there are no tasks waiting for approval.
+            checkForStaleFollowUps(taskRepo, settings, emailService)
+
             val canRunDiscovery = settings.isSearchConfigured || settings.isAiConfigured
             if (pendingTasks.isEmpty() && canRunDiscovery) {
                 Log.i(tag, "Running autonomous lead discovery in background...")
@@ -131,7 +130,7 @@ class AutoPilotWorker(
                     LiveWorkerLogStore.record("Apollo-Scout", "> ${prospect.sourcePlatform}: selected $${pricing.amount}; tone ${outreachTone.promptLabel}.")
 
                     val prompt = "Write a persuasive personalized pitch.\nTitle: ${prospect.title}\nContext: ${prospect.snippet}\nClient website: ${targetWebsite.ifBlank { "not provided" }}\nSource: ${prospect.sourcePlatform}\n"
-                    val systemPrompt = "You are Apollo-Scout. Compare the client's site with three plausible direct competitors and write in a ${outreachTone.promptLabel.lowercase()} tone. Be explicit, concise, and persuasive."
+                    val systemPrompt = "You are Apollo-Scout. Compare the client's site with three plausible direct competitors and write in a ${outreachTone.promptLabel.lowercase()} tone. Be explicit, concise, and focused on conversion."
                     LiveWorkerLogStore.record("Apollo-Scout", "> Comparing three likely competitors and generating price...")
 
                     val aiRes = aiService.generateContentWithFallback(
@@ -154,6 +153,10 @@ class AutoPilotWorker(
                         pitchBody += "\n\nThe ${outreachTone.promptLabel.lowercase()} audit package is $${pricing.amount}. Complete payment here: $dynamicPaymentLink"
                     }
 
+                    val siteUrl = targetWebsite.ifBlank { prospect.link }
+                    val miniAuditPoints = emailService.generateMiniAuditPoints(siteUrl)
+                    val htmlBody = emailService.buildHtmlEmailBody(pitchBody, miniAuditPoints)
+
                     val autoTask = Task(
                         title = "Auto-Pilot: Outreach to ${prospect.title.take(35)}",
                         category = "Client Acquisition",
@@ -168,6 +171,10 @@ class AutoPilotWorker(
                             append("AUTONOMOUS BACKGROUND OUTREACH:\n\n")
                             append(pitchBody)
                             append("\n\nDiscovered URL: ${prospect.link}\n")
+                            append("\nMini-audit:\n")
+                            miniAuditPoints.forEachIndexed { index, point ->
+                                append("${index + 1}. $point\n")
+                            }
                         },
                         logs = listOf(
                             "⚡ [Auto-Pilot] Discovered prospect via ${searchResult.providerUsed} on ${prospect.sourcePlatform}",
@@ -211,6 +218,92 @@ class AutoPilotWorker(
         }
     }
 
+    private suspend fun checkForStaleFollowUps(
+        taskRepo: TaskRepository,
+        settings: com.example.data.repository.AppSettings,
+        emailService: BrevoEmailService
+    ) {
+        if (!settings.isBrevoConfigured) {
+            return
+        }
+
+        val tasks = taskRepo.observeTasks().first()
+        val staleTasks = tasks.filter { task ->
+            if (task.clientEmail.isBlank()) return@filter false
+            if (task.status !in listOf("PITCHED", "RUNNING")) return@filter false
+
+            val lastUpdatedMs = task.updatedAt?.toDate()?.time ?: task.createdAt?.toDate()?.time ?: 0L
+            val noReply = task.logs.none { log ->
+                log.contains("reply", ignoreCase = true) ||
+                    log.contains("replied", ignoreCase = true) ||
+                    log.contains("response", ignoreCase = true)
+            }
+            System.currentTimeMillis() - lastUpdatedMs > TimeUnit.DAYS.toMillis(3) && noReply
+        }
+
+        for (task in staleTasks) {
+            val followUpBody = buildFollowUpBody(task)
+            val miniAuditPoints = emailService.generateMiniAuditPoints(task.client.ifBlank { task.clientEmail })
+            val htmlContent = emailService.buildHtmlEmailBody(followUpBody, miniAuditPoints)
+
+            val result = emailService.sendEmail(
+                apiKey = settings.brevoApiKey,
+                toEmail = task.clientEmail,
+                subject = "Just checking in on my previous SEO audit email",
+                bodyText = followUpBody,
+                htmlContent = htmlContent
+            )
+
+            val followUpTask = Task(
+                title = "Follow-up: ${task.client.ifBlank { "Client" }}",
+                category = "Client Acquisition",
+                workerName = "AutoPilot Follow-Up",
+                workerRole = "Follow-up Specialist",
+                status = "PENDING",
+                priority = "MEDIUM",
+                client = task.client.ifBlank { "Client" },
+                clientEmail = task.clientEmail,
+                estimatedValue = task.estimatedValue,
+                details = followUpBody,
+                logs = listOf(
+                    "Follow-up task created automatically after 3+ days with no reply.",
+                    "Follow-up email sent to ${task.clientEmail}"
+                )
+            )
+            taskRepo.createTask(followUpTask)
+
+            if (result.isSuccess) {
+                taskRepo.updateTaskStatus(
+                    taskId = task.id,
+                    newStatus = "PITCHED",
+                    newLog = "Follow-up sent after 3+ days with no reply."
+                )
+            } else {
+                taskRepo.updateTaskStatus(
+                    taskId = task.id,
+                    newStatus = "RUNNING",
+                    newLog = "Follow-up email failed: ${result.exceptionOrNull()?.message ?: "Unknown error"}"
+                )
+            }
+        }
+    }
+
+    private fun buildFollowUpBody(task: Task): String {
+        val clientName = task.client.ifBlank { "there" }
+        return """
+Hi $clientName,
+
+Just checking in to see if you saw my previous email. I know things get busy, but I wanted to circle back because I think there may be value in a quick SEO audit for your site.
+
+I’d be happy to share a brief rundown of the biggest technical and content gaps, and I can also suggest a few practical fixes that would improve rankings and conversions.
+
+If this is helpful, I’d be glad to send over a quick example audit and a short action plan.
+
+Best,
+AutoFreelancer AI
+        """.trimIndent()
+    }
+
     private suspend fun executeTaskAutonomously(
         task: Task,
         settingsRepo: SettingsRepository,
@@ -229,7 +322,6 @@ class AutoPilotWorker(
             newLog = "⚡ [Auto-Pilot] Autonomously executing task approval & deliverable synthesis..."
         )
 
-        // 1. Search leads if needed
         val searchResult = searchService.searchWithFallback(
             query = "SEO audit ${task.title}",
             serperKey = settings.serperApiKey,
@@ -250,7 +342,6 @@ class AutoPilotWorker(
         LiveWorkerLogStore.record(task.workerName, "> Applying ${outreachTone.promptLabel} tone and $${pricing.amount} quote.")
         LiveWorkerLogStore.record(task.workerName, "> Comparing client website with three likely competitors...")
 
-        // 2. Generate Deliverable with dynamic pricing and payment link
         val aiResult = aiService.generateTaskDeliverable(
             geminiApiKey = settings.geminiApiKey,
             openRouterApiKey = settings.openRouterApiKey,
@@ -293,7 +384,6 @@ class AutoPilotWorker(
             newLog = "⚡ [Auto-Pilot] Deliverable autonomously synthesized and approved."
         )
 
-        // 3. Auto-dispatch email if target email present
         val targetEmail = task.clientEmail.trim().takeIf(BusinessEmailValidator::isValid)
             ?: searchResult.leads.firstNotNullOfOrNull { item ->
                 BusinessEmailValidator.findIn("${item.snippet}\n${item.title}")
@@ -301,39 +391,52 @@ class AutoPilotWorker(
 
         if (settings.isBrevoConfigured) {
             if (targetEmail.isNotBlank()) {
+                val siteUrl = targetWebsite.ifBlank { task.client }
+                val miniAuditPoints = emailService.generateMiniAuditPoints(siteUrl)
+                val pitchBody = buildString {
+                    append("Hi ${task.client},\n\n")
+                    append("I took a quick look at your website and wanted to share a simple SEO snapshot.\n\n")
+                    append(deliverableContent)
+                    append("\n\nHere is a quick free audit of your site...\n")
+                    miniAuditPoints.forEachIndexed { index, point ->
+                        append("${index + 1}. $point\n")
+                    }
+                    append("\nThanks for your time. I’d be happy to walk through the main opportunities with you.\n")
+                }
+
+                val htmlContent = emailService.buildHtmlEmailBody(pitchBody, miniAuditPoints)
                 val emailRes = emailService.sendEmail(
                     apiKey = settings.brevoApiKey,
                     toEmail = targetEmail,
                     subject = "SEO Audit & Growth Proposal: ${task.title}",
-                    bodyText = deliverableContent
+                    bodyText = pitchBody,
+                    htmlContent = htmlContent
                 )
                 if (emailRes.isSuccess) {
-                    val sent = emailRes.getOrThrow()
                     replyRateRepository.recordSentPitch(targetEmail, outreachTone)
                     LiveWorkerLogStore.record(task.workerName, "> Pitch sent; reply-rate event recorded.")
                     taskRepo.updateTaskStatus(
                         taskId = task.id,
-                        newStatus = "COMPLETED",
+                        newStatus = "PITCHED",
                         newLog = "Email sent successfully via Brevo"
                     )
                 } else {
                     val err = emailRes.exceptionOrNull()?.message ?: "Unknown delivery error"
                     taskRepo.updateTaskStatus(
                         taskId = task.id,
-                        newStatus = "COMPLETED",
+                        newStatus = "RUNNING",
                         newLog = "Brevo delivery error: $err"
                     )
                 }
             } else {
                 taskRepo.updateTaskStatus(
                     taskId = task.id,
-                    newStatus = "COMPLETED",
+                    newStatus = "RUNNING",
                     newLog = "Error: Client email is missing. Please provide client email to send proposal."
                 )
             }
         }
 
-        // Feature 3: Persist lead into CRM
         val crmClient = CrmClient(
             name = task.client,
             company = task.category,
@@ -354,37 +457,38 @@ object AutoPilotScheduler {
 
     fun schedule(context: Context, enabled: Boolean) {
         val workManager = WorkManager.getInstance(context)
-        if (enabled) {
-            val constraints = Constraints.Builder()
-                .setRequiredNetworkType(NetworkType.CONNECTED)
-                .build()
-
-            val periodicRequest = PeriodicWorkRequestBuilder<AutoPilotWorker>(
-                4, TimeUnit.HOURS
-            )
-                .setConstraints(constraints)
-                .build()
-
-            workManager.enqueueUniquePeriodicWork(
-                UNIQUE_WORK_NAME,
-                ExistingPeriodicWorkPolicy.UPDATE,
-                periodicRequest
-            )
-
-            val immediateRequest = OneTimeWorkRequestBuilder<AutoPilotWorker>()
-                .setConstraints(constraints)
-                .build()
-
-            workManager.enqueueUniqueWork(
-                UNIQUE_IMMEDIATE_WORK_NAME,
-                ExistingWorkPolicy.REPLACE,
-                immediateRequest
-            )
-            Log.i("AutoPilotScheduler", "Auto-Pilot periodic and immediate work scheduled.")
-        } else {
+        if (!enabled) {
             workManager.cancelUniqueWork(UNIQUE_WORK_NAME)
             workManager.cancelUniqueWork(UNIQUE_IMMEDIATE_WORK_NAME)
             Log.i("AutoPilotScheduler", "Auto-Pilot work cancelled.")
+            return
         }
+
+        val constraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
+
+        val periodicRequest = PeriodicWorkRequestBuilder<AutoPilotWorker>(
+            4, TimeUnit.HOURS
+        )
+            .setConstraints(constraints)
+            .build()
+
+        workManager.enqueueUniquePeriodicWork(
+            UNIQUE_WORK_NAME,
+            ExistingPeriodicWorkPolicy.UPDATE,
+            periodicRequest
+        )
+
+        val immediateRequest = OneTimeWorkRequestBuilder<AutoPilotWorker>()
+            .setConstraints(constraints)
+            .build()
+
+        workManager.enqueueUniqueWork(
+            UNIQUE_IMMEDIATE_WORK_NAME,
+            ExistingWorkPolicy.REPLACE,
+            immediateRequest
+        )
+        Log.i("AutoPilotScheduler", "Auto-Pilot periodic and immediate work scheduled.")
     }
 }
