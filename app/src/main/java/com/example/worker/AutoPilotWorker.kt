@@ -156,6 +156,7 @@ class AutoPilotWorker(
                     val siteUrl = targetWebsite.ifBlank { prospect.link }
                     val miniAuditPoints = emailService.generateMiniAuditPoints(siteUrl)
                     val htmlBody = emailService.buildHtmlEmailBody(pitchBody, miniAuditPoints)
+                    val leadScore = computeLeadScore(targetWebsite, pricing.amount, discoveredEmail)
 
                     val autoTask = Task(
                         title = "Auto-Pilot: Outreach to ${prospect.title.take(35)}",
@@ -175,12 +176,14 @@ class AutoPilotWorker(
                             miniAuditPoints.forEachIndexed { index, point ->
                                 append("${index + 1}. $point\n")
                             }
+                            append("\nLead score: $leadScore/100\n")
                         },
                         logs = listOf(
                             "⚡ [Auto-Pilot] Discovered prospect via ${searchResult.providerUsed} on ${prospect.sourcePlatform}",
                             "⚡ [Auto-Pilot] Proposal drafted and queued for Auto-Pilot execution.",
                             "Selected outreach tone: ${outreachTone.name}",
-                            "Dynamic audit quote: $${pricing.amount} (${pricing.segment})"
+                            "Dynamic audit quote: $${pricing.amount} (${pricing.segment})",
+                            "Lead score: $leadScore/100"
                         )
                     )
 
@@ -199,7 +202,11 @@ class AutoPilotWorker(
                         status = "Pitched",
                         leadSource = "Auto-Pilot Discovery",
                         pitchMessage = pitchBody,
-                        estimatedValue = pricing.amount.toDouble()
+                        estimatedValue = pricing.amount.toDouble(),
+                        leadScore = leadScore,
+                        pipelineStage = "Pitched",
+                        lastContactedAt = System.currentTimeMillis(),
+                        nextFollowUpAt = System.currentTimeMillis() + TimeUnit.DAYS.toMillis(3)
                     )
                     val clientResult = clientRepo.upsertClient(crmLead)
                     if (clientResult.isFailure) {
@@ -216,6 +223,20 @@ class AutoPilotWorker(
             Log.e(tag, "Auto-Pilot execution encountered error: ${e.message}", e)
             return Result.failure()
         }
+    }
+
+    private fun computeLeadScore(websiteUrl: String, price: Double, email: String): Int {
+        var score = 35
+        if (websiteUrl.isNotBlank()) score += 20
+        if (email.isNotBlank()) score += 15
+        score += when {
+            price >= 5000.0 -> 20
+            price >= 2000.0 -> 15
+            price >= 800.0 -> 10
+            else -> 5
+        }
+        if (score > 100) score = 100
+        return score
     }
 
     private suspend fun checkForStaleFollowUps(
@@ -445,7 +466,11 @@ AutoFreelancer AI
             status = "Pitched",
             leadSource = "Auto-Pilot Worker",
             pitchMessage = deliverableContent,
-            estimatedValue = pricing.amount.toDouble()
+            estimatedValue = pricing.amount.toDouble(),
+            leadScore = computeLeadScore(targetWebsite, pricing.amount, targetEmail),
+            pipelineStage = "Pitched",
+            lastContactedAt = System.currentTimeMillis(),
+            nextFollowUpAt = System.currentTimeMillis() + TimeUnit.DAYS.toMillis(3)
         )
         clientRepo.upsertClient(crmClient)
     }
