@@ -1,27 +1,23 @@
 package com.example
 
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.platform.LocalContext
-import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.MarkEmailUnread
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -30,13 +26,18 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
-import android.util.Log
-import androidx.compose.material.icons.filled.MarkEmailUnread
-import androidx.compose.material3.Badge
-import androidx.compose.material3.BadgedBox
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.repository.ClientRepository
 import com.example.data.repository.InboxRepository
 import com.example.data.repository.SettingsRepository
@@ -51,8 +52,11 @@ import com.example.ui.theme.CyberPrimary
 import com.example.ui.theme.CyberSecondary
 import com.example.ui.viewmodel.DashboardViewModel
 import com.google.firebase.Firebase
-import com.google.firebase.auth.auth
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.GoogleAuthProvider
+import com.google.firebase.auth.auth
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 
 class MainActivity : ComponentActivity() {
     private var isAuthenticated by mutableStateOf(false)
@@ -60,24 +64,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
+
         try {
-            // AppCheck ko bypass kiya hai taake login block na ho
             enableEdgeToEdge()
-            
-            val auth = Firebase.auth
-            if (auth.currentUser != null) {
-                isAuthenticated = true
-            } else {
-                // Google Login ki jagah Anonymous Login (chupke se background mein)
-                auth.signInAnonymously().addOnCompleteListener { task ->
-                    if (task.isSuccessful) {
-                        isAuthenticated = true
-                        Log.d("Auth", "Anonymous login successful")
-                    } else {
-                        showStartupError(task.exception ?: Exception("Anonymous Auth failed"))
-                    }
-                }
+            lifecycleScope.launch {
+                val auth = Firebase.auth
+                ensureFirebaseAuthReady(auth)
+                isAuthenticated = auth.currentUser != null
             }
         } catch (error: Exception) {
             showStartupError(error)
@@ -91,7 +84,6 @@ class MainActivity : ComponentActivity() {
                 } else if (isAuthenticated) {
                     AppRootContent()
                 } else {
-                    // Loading screen jab tak login ho raha ho
                     Surface(modifier = Modifier.fillMaxSize()) {
                         Column(
                             modifier = Modifier.fillMaxSize().padding(24.dp),
@@ -102,6 +94,27 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+        }
+    }
+
+    private suspend fun ensureFirebaseAuthReady(auth: FirebaseAuth) {
+        try {
+            val currentUser = auth.currentUser
+            if (currentUser != null) {
+                val isGoogleUser = currentUser.providerData.any { it.providerId == GoogleAuthProvider.PROVIDER_ID }
+                Log.d("Auth", "Authenticated user already available: ${currentUser.uid}, google=${isGoogleUser}")
+                return
+            }
+
+            val result = auth.signInAnonymously().await()
+            val uid = result.user?.uid
+            Log.d("Auth", "Anonymous login successful for uid: $uid")
+            if (uid == null) {
+                throw IllegalStateException("Firebase anonymous sign-in returned no user.")
+            }
+        } catch (error: Exception) {
+            Log.e("Auth", "Firebase auth initialization failed before app boot", error)
+            showStartupError(error)
         }
     }
 
