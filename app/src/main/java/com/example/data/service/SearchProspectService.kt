@@ -32,12 +32,13 @@ class SearchProspectService(
         serperKey: String,
         tavilyKey: String
     ): SearchExecutionResult = withContext(Dispatchers.IO) {
+        val searchQuery = searchVariations(query).random()
         val cleanSerper = serperKey.trim()
         val cleanTavily = tavilyKey.trim()
 
         // 1. Try Serper first if key exists
         if (cleanSerper.isNotBlank()) {
-            val serperResult = searchViaSerper(query, cleanSerper)
+            val serperResult = searchViaSerper(searchQuery, cleanSerper)
             if (serperResult.isSuccess) {
                 val leads = serperResult.getOrThrow()
                 if (leads.isNotEmpty()) {
@@ -55,7 +56,7 @@ class SearchProspectService(
 
         // 2. Try Tavily as backup if key exists
         if (cleanTavily.isNotBlank()) {
-            val tavilyResult = searchViaTavily(query, cleanTavily)
+            val tavilyResult = searchViaTavily(searchQuery, cleanTavily)
             if (tavilyResult.isSuccess) {
                 val leads = tavilyResult.getOrThrow()
                 val usedBackup = cleanSerper.isNotBlank()
@@ -83,11 +84,35 @@ class SearchProspectService(
         }
 
         SearchExecutionResult(
-            leads = getFallbackProspects(query),
+            leads = getFallbackProspects(searchQuery),
             providerUsed = "Sandbox Fallback",
             isBackupUsed = true,
             note = note
         )
+    }
+
+    internal fun searchVariations(query: String): List<String> {
+        val baseQuery = query.trim().replace(Regex("\\s+"), " ")
+        if (baseQuery.isBlank()) return listOf(baseQuery)
+
+        val topic = baseQuery
+            .replace(Regex("""(?i)\bsite:\S+"""), " ")
+            .replace(Regex("""["()]"""), " ")
+            .split(Regex("""(?i)\b(?:OR|AND)\b|\s+"""))
+            .filter { word ->
+                word.isNotBlank() && word.lowercase() !in SEARCH_INTENT_WORDS
+            }
+            .distinctBy { it.lowercase() }
+            .joinToString(" ")
+            .ifBlank { baseQuery }
+
+        return listOf(
+            "need $topic help site:reddit.com",
+            "hiring $topic expert site:linkedin.com",
+            "looking for $topic site:x.com",
+            "recommend $topic agency",
+            "$topic freelancer site:reddit.com"
+        ).distinct()
     }
 
     suspend fun searchViaSerper(query: String, apiKey: String): Result<List<ProspectResult>> = withContext(Dispatchers.IO) {
@@ -257,6 +282,12 @@ class SearchProspectService(
                 sourcePlatform = "IndieHackers",
                 queryMatched = query
             )
+        )
+    }
+
+    private companion object {
+        val SEARCH_INTENT_WORDS = setOf(
+            "a", "an", "for", "hire", "hiring", "looking", "need", "seeking"
         )
     }
 }

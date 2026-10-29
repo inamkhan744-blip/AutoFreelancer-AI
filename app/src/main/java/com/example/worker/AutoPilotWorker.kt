@@ -25,6 +25,7 @@ import com.example.data.service.DynamicPricingEngine
 import com.example.data.service.SearchProspectService
 import com.example.util.BusinessEmailValidator
 import com.example.util.LiveWorkerLogStore
+import com.example.util.ProspectDeduplicator
 import kotlinx.coroutines.flow.first
 import java.util.concurrent.TimeUnit
 
@@ -78,9 +79,9 @@ class AutoPilotWorker(
                 )
             }
 
-            // 2. Autonomous Lead Discovery & Pitch Generation in the background
+            // 2. Discover new leads only when there are no tasks waiting for approval.
             val canRunDiscovery = settings.isSearchConfigured || settings.isAiConfigured
-            if (canRunDiscovery) {
+            if (pendingTasks.isEmpty() && canRunDiscovery) {
                 Log.i(tag, "Running autonomous lead discovery in background...")
                 LiveWorkerLogStore.record("Apollo-Scout", "> Scraping Reddit, LinkedIn, and web search results...")
                 val searchResult = searchService.searchWithFallback(
@@ -89,14 +90,23 @@ class AutoPilotWorker(
                     tavilyKey = settings.tavilyApiKey
                 )
 
+                val knownProspects = ProspectDeduplicator(
+                    tasks = taskRepo.observeTasks().first(),
+                    clients = clientRepo.observeClients().first()
+                )
                 val leads = searchResult.leads.mapNotNull { prospect ->
-                    BusinessEmailValidator.findIn("${prospect.snippet}\n${prospect.title}")
-                        ?.let { prospect to it }
-                        ?: run {
-                            Log.i(tag, "Skipping lead without a valid business email: ${prospect.title}")
-                            null
-                        }
-                }.take(2)
+                    val discoveredEmail = BusinessEmailValidator.findIn("${prospect.snippet}\n${prospect.title}")
+                    if (discoveredEmail == null) {
+                        Log.i(tag, "Skipping lead without a valid business email: ${prospect.title}")
+                        null
+                    } else if (knownProspects.contains(prospect.link, discoveredEmail)) {
+                        Log.i(tag, "Skipping existing lead: ${prospect.link}")
+                        null
+                    } else {
+                        knownProspects.remember(prospect.link, discoveredEmail)
+                        prospect to discoveredEmail
+                    }
+                }.take(3)
                 for ((prospect, discoveredEmail) in leads) {
                     val outreachTone = replyRateRepository.bestPerformingTone()
                     val targetWebsite = CompetitorSpyPrompt.websiteFor(prospect)
@@ -141,7 +151,7 @@ class AutoPilotWorker(
                         category = "Client Acquisition",
                         workerName = "Apollo-Scout",
                         workerRole = "Autonomous Scout",
-                        status = "COMPLETED",
+                        status = "PENDING",
                         priority = "HIGH",
                         client = "${prospect.sourcePlatform} Lead",
                         clientEmail = discoveredEmail,
@@ -153,48 +163,19 @@ class AutoPilotWorker(
                         },
                         logs = listOf(
                             "⚡ [Auto-Pilot] Discovered prospect via ${searchResult.providerUsed} on ${prospect.sourcePlatform}",
-                            "⚡ [Auto-Pilot] Proposal formulated with dynamic CTA and finalized.",
+                            "⚡ [Auto-Pilot] Proposal drafted and queued for Auto-Pilot execution.",
                             "Selected outreach tone: ${outreachTone.name}",
                             "Dynamic audit quote: $${pricing.amount} (${pricing.segment})"
                         )
                     )
 
-                    taskRepo.createTask(autoTask)
-
-                    // Send outreach only when Brevo is configured.
-                    if (settings.isBrevoConfigured) {
-                        if (discoveredEmail.isNotBlank()) {
-                            val sendRes = emailService.sendEmail(
-                                apiKey = settings.brevoApiKey,
-                                toEmail = discoveredEmail,
-                                subject = "SEO Audit & Growth Proposal: ${autoTask.title}",
-                                bodyText = pitchBody
-                            )
-                            if (sendRes.isSuccess) {
-                                replyRateRepository.recordSentPitch(discoveredEmail, outreachTone)
-                                taskRepo.updateTaskStatus(
-                                    taskId = autoTask.id,
-                                    newStatus = "COMPLETED",
-                                    newLog = "Email sent successfully via Brevo"
-                                )
-                            } else {
-                                val err = sendRes.exceptionOrNull()?.message ?: "Unknown delivery error"
-                                taskRepo.updateTaskStatus(
-                                    taskId = autoTask.id,
-                                    newStatus = "COMPLETED",
-                                    newLog = "Brevo delivery error: $err"
-                                )
-                            }
-                        } else {
-                            taskRepo.updateTaskStatus(
-                                taskId = autoTask.id,
-                                newStatus = "COMPLETED",
-                                newLog = "Error: Client email is missing. Please provide client email to send proposal."
-                            )
-                        }
+                    val taskResult = taskRepo.createTask(autoTask)
+                    if (taskResult.isFailure) {
+                        val error = taskResult.exceptionOrNull()?.message ?: "Unable to save discovered lead task."
+                        Log.e(tag, "Failed to save discovered lead ${prospect.link}: $error")
+                        continue
                     }
 
-                    // Feature 3: Persist lead into CRM
                     val crmLead = CrmClient(
                         name = prospect.title.take(40),
                         company = prospect.sourcePlatform,
@@ -205,7 +186,11 @@ class AutoPilotWorker(
                         pitchMessage = pitchBody,
                         estimatedValue = pricing.amount.toDouble()
                     )
-                    clientRepo.upsertClient(crmLead)
+                    val clientResult = clientRepo.upsertClient(crmLead)
+                    if (clientResult.isFailure) {
+                        val error = clientResult.exceptionOrNull()?.message ?: "Unable to save lead to CRM."
+                        Log.e(tag, "Failed to save discovered lead ${prospect.link} to CRM: $error")
+                    }
                 }
             }
 
@@ -365,7 +350,7 @@ object AutoPilotScheduler {
                 .build()
 
             val periodicRequest = PeriodicWorkRequestBuilder<AutoPilotWorker>(
-                15, TimeUnit.MINUTES
+                4, TimeUnit.HOURS
             )
                 .setConstraints(constraints)
                 .build()
