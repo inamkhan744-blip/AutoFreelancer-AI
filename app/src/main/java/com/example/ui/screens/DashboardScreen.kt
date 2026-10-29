@@ -6,11 +6,6 @@ import android.media.MediaPlayer
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.ui.platform.LocalContext
-import androidx.core.content.ContextCompat
-import com.example.data.service.GeneratedVoiceNote
-import com.example.util.JarvisVoiceManager
-import com.example.util.VoiceCommandState
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -42,8 +37,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Cancel
@@ -53,21 +46,19 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.HourglassEmpty
-import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.RocketLaunch
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material.icons.filled.Work
-import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.Headphones
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
@@ -79,6 +70,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -105,6 +97,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -112,6 +105,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.Task
+import com.example.data.service.GeneratedVoiceNote
 import com.example.ui.theme.CyberError
 import com.example.ui.theme.CyberPrimary
 import com.example.ui.theme.CyberPrimaryLight
@@ -122,9 +116,9 @@ import com.example.ui.viewmodel.DashboardMetrics
 import com.example.ui.viewmodel.DashboardViewModel
 import com.example.ui.viewmodel.TasksUiState
 import com.example.ui.viewmodel.WorkerNotification
+import com.example.util.JarvisVoiceManager
+import com.example.util.VoiceCommandState
 import com.example.util.WorkerLogEntry
-import com.google.firebase.Firebase
-import com.google.firebase.auth.auth
 import java.text.NumberFormat
 import java.util.Locale
 
@@ -147,9 +141,8 @@ fun DashboardScreen(
     val isAutoPilotActive by viewModel.isAutoPilotActive.collectAsState()
     val liveTerminalEntries by viewModel.liveTerminalEntries.collectAsState()
 
-    val currentUser = runCatching { Firebase.auth.currentUser }.getOrNull()
-    val userEmail = currentUser?.email ?: "Freelancer Director"
-    val userName = currentUser?.displayName ?: userEmail.substringBefore("@")
+    // FIXED: Firebase Auth removed for offline/login-free mode
+    val userName = "Freelancer Director"
 
     val context = LocalContext.current
     val jarvisManager = remember {
@@ -329,7 +322,6 @@ fun DashboardScreen(
             val isWideScreen = maxWidth >= 840.dp
 
             Column(modifier = Modifier.fillMaxSize()) {
-                // Live Notification Banner when AI Worker starts
                 AnimatedVisibility(
                     visible = activeNotification != null,
                     enter = fadeIn() + expandVertically(),
@@ -343,7 +335,6 @@ fun DashboardScreen(
                     }
                 }
 
-                // Auto-Pilot Status Banner
                 AnimatedVisibility(
                     visible = isAutoPilotActive,
                     enter = fadeIn() + expandVertically(),
@@ -411,9 +402,7 @@ fun DashboardScreen(
                 LiveTerminalPanel(entries = liveTerminalEntries)
 
                 if (isWideScreen) {
-                    // Desktop / Tablet Two-Column Layout
                     Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                        // Left Column: Metrics + Filters + Task Feed
                         Column(
                             modifier = Modifier
                                 .weight(1.2f)
@@ -441,7 +430,6 @@ fun DashboardScreen(
                             )
                         }
 
-                        // Right Column: Detail Inspector / Console
                         Surface(
                             modifier = Modifier
                                 .weight(0.8f)
@@ -460,7 +448,6 @@ fun DashboardScreen(
                         }
                     }
                 } else {
-                    // Mobile Layout
                     Column(
                         modifier = Modifier
                             .weight(1f)
@@ -493,7 +480,6 @@ fun DashboardScreen(
         }
     }
 
-    // Detail Modal for Mobile if a task is selected
     if (selectedTask != null) {
         BoxWithConstraints {
             if (maxWidth < 840.dp) {
@@ -577,7 +563,6 @@ fun DashboardScreen(
 
                                 Spacer(modifier = Modifier.height(16.dp))
 
-                                // AI Voice Note (ElevenLabs)
                                 VoiceNoteSection(
                                     task = task,
                                     viewModel = viewModel,
@@ -587,7 +572,6 @@ fun DashboardScreen(
 
                                 Spacer(modifier = Modifier.height(16.dp))
 
-                                // Brevo Email Dispatch Section
                                 Card(
                                     modifier = Modifier.fillMaxWidth(),
                                     shape = RoundedCornerShape(10.dp),
@@ -683,7 +667,6 @@ fun DashboardScreen(
         }
     }
 
-    // Rejection Dialog with Reasons
     rejectTargetTask?.let { task ->
         RejectReasonDialog(
             task = task,
@@ -694,7 +677,6 @@ fun DashboardScreen(
         )
     }
 
-    // Create New Task Dialog
     if (showCreateDialog) {
         CreateTaskDialog(
             onDismiss = { viewModel.closeCreateTaskDialog() },
@@ -704,7 +686,6 @@ fun DashboardScreen(
         )
     }
 
-    // Jarvis Voice Command Visual Indicator Modal
     if (showJarvisDialog || voiceState is VoiceCommandState.Listening || voiceState is VoiceCommandState.Processing) {
         JarvisVisualIndicatorDialog(
             voiceState = voiceState,
@@ -1186,7 +1167,6 @@ fun TaskItemCard(
         )
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
-            // Category, Client & Priority Header
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -1225,7 +1205,6 @@ fun TaskItemCard(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Title
             Text(
                 text = task.title,
                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
@@ -1234,7 +1213,6 @@ fun TaskItemCard(
 
             Spacer(modifier = Modifier.height(6.dp))
 
-            // Details preview
             Text(
                 text = task.details,
                 style = MaterialTheme.typography.bodySmall,
@@ -1245,7 +1223,6 @@ fun TaskItemCard(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Worker Assigned & Estimated Revenue
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -1281,7 +1258,6 @@ fun TaskItemCard(
                 )
             }
 
-            // Running status animation
             if (task.status == "RUNNING" || task.status == "APPROVED") {
                 Spacer(modifier = Modifier.height(10.dp))
                 LinearProgressIndicator(
@@ -1293,7 +1269,6 @@ fun TaskItemCard(
                 )
             }
 
-            // Rejection reason note if rejected
             if (task.status == "REJECTED" && !task.rejectionReason.isNullOrBlank()) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Box(
@@ -1310,7 +1285,6 @@ fun TaskItemCard(
                 }
             }
 
-            // Expandable Logs Toggle if present
             if (task.logs.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(
@@ -1353,14 +1327,12 @@ fun TaskItemCard(
                 }
             }
 
-            // Action Buttons
             if (task.status == "PENDING") {
                 Spacer(modifier = Modifier.height(12.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    // Approve Button
                     Button(
                         onClick = onApprove,
                         modifier = Modifier
@@ -1377,7 +1349,6 @@ fun TaskItemCard(
                         Text("Approve", fontWeight = FontWeight.Bold)
                     }
 
-                    // Reject Button
                     OutlinedButton(
                         onClick = onReject,
                         modifier = Modifier
@@ -1562,7 +1533,6 @@ fun TaskDetailPane(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // AI Voice Note (ElevenLabs)
             VoiceNoteSection(
                 task = task,
                 viewModel = viewModel,
@@ -1572,7 +1542,6 @@ fun TaskDetailPane(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Brevo Email Dispatch Section
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
@@ -1839,7 +1808,6 @@ fun CreateTaskDialog(
             ) {
                 Text("New AI Worker Task", fontWeight = FontWeight.Bold)
                 IconButton(onClick = {
-                    // Quick autocomplete with creative preset
                     title = "Delivering SEO technical audit & keyword clusters"
                     category = "Deliverable"
                     workerName = "ReportBot-Pro"
@@ -2180,7 +2148,6 @@ fun JarvisVisualIndicatorDialog(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Visual Pulse / State Indicator
                 Box(
                     modifier = Modifier
                         .size(80.dp)
