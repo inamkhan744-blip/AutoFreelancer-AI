@@ -59,6 +59,16 @@ android {
     buildConfig = true
   }
   testOptions { unitTests { isIncludeAndroidResources = true } }
+  packaging {
+    resources {
+      excludes += setOf(
+        "META-INF/LICENSE.md",
+        "META-INF/NOTICE.md",
+        "META-INF/LICENSE",
+        "META-INF/NOTICE"
+      )
+    }
+  }
   dependenciesInfo {
     includeInApk = false
     includeInBundle = true
@@ -106,6 +116,8 @@ dependencies {
   implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
   implementation(libs.retrofit)
+  implementation("com.sun.mail:android-mail:1.6.7")
+  implementation("com.sun.mail:android-activation:1.6.7")
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)

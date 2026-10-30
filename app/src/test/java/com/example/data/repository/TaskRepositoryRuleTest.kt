@@ -1,8 +1,9 @@
 package com.example.data.repository
 
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
 import com.example.base.FirestoreEmulatorTestBase
 import com.example.data.model.Task
-import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -14,10 +15,12 @@ import java.util.UUID
 
 class TaskRepositoryRuleTest : FirestoreEmulatorTestBase() {
 
+    private val context: Context get() = ApplicationProvider.getApplicationContext()
+
     @Test
     fun createTask_validPayload_createsDocumentAndReturnsId() = runBlocking {
         signInTestUser(ALICE_EMAIL)
-        val repository = TaskRepository(firestore)
+        val repository = TaskRepository(context)
 
         val task = Task(
             id = "task_" + UUID.randomUUID().toString().take(8),
@@ -42,7 +45,7 @@ class TaskRepositoryRuleTest : FirestoreEmulatorTestBase() {
     @Test
     fun observeTasks_authenticatedOwner_emitsRealtimeUpdates() = runBlocking {
         signInTestUser(ALICE_EMAIL)
-        val repository = TaskRepository(firestore)
+        val repository = TaskRepository(context)
         val taskId = "task_" + UUID.randomUUID().toString().take(8)
 
         val task = Task(
@@ -69,7 +72,7 @@ class TaskRepositoryRuleTest : FirestoreEmulatorTestBase() {
     @Test
     fun approveTask_authenticatedOwner_updatesStatusToApproved() = runBlocking {
         signInTestUser(ALICE_EMAIL)
-        val repository = TaskRepository(firestore)
+        val repository = TaskRepository(context)
         val taskId = "task_" + UUID.randomUUID().toString().take(8)
 
         val task = Task(
@@ -98,7 +101,7 @@ class TaskRepositoryRuleTest : FirestoreEmulatorTestBase() {
     @Test
     fun rejectTask_authenticatedOwner_updatesStatusToRejectedWithReason() = runBlocking {
         signInTestUser(ALICE_EMAIL)
-        val repository = TaskRepository(firestore)
+        val repository = TaskRepository(context)
         val taskId = "task_" + UUID.randomUUID().toString().take(8)
 
         val task = Task(
@@ -126,19 +129,14 @@ class TaskRepositoryRuleTest : FirestoreEmulatorTestBase() {
     }
 
     @Test
-    fun observeTasks_unauthenticatedUser_failsWithPermissionDenied() = runBlocking {
+    fun observeTasks_unauthenticatedUser_worksInGuestModeWithoutCrashing() = runBlocking {
         auth.signOut()
-        val repository = TaskRepository(firestore)
+        val repository = TaskRepository(context)
 
-        var caughtException: Exception? = null
-        try {
-            withTimeout(FLOW_TIMEOUT_MS) {
-                repository.observeTasks().first()
-            }
-        } catch (e: Exception) {
-            caughtException = e
+        val tasks = withTimeout(FLOW_TIMEOUT_MS) {
+            repository.observeTasks().first()
         }
-        assertNotNull("Expected exception when unauthenticated", caughtException)
+        assertNotNull("Guest mode should provide local tasks list without throwing exception", tasks)
     }
 
     private companion object {

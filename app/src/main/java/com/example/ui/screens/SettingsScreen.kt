@@ -1,6 +1,8 @@
 package com.example.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -121,6 +123,18 @@ fun SettingsScreen(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
+    val importLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) {
+            viewModel.importDataFromJson(context, uri) { success, msg ->
+                scope.launch {
+                    snackbarHostState.showSnackbar(msg)
+                }
+            }
+        }
+    }
+
     // Form inputs - Ab yeh LaunchedEffect se update honge taake screen change par reset na hon
     var geminiApiKey by remember { mutableStateOf(currentSettings.geminiApiKey) }
     var openRouterApiKey by remember { mutableStateOf(currentSettings.openRouterApiKey) }
@@ -151,6 +165,13 @@ fun SettingsScreen(
     var showTwilioAuthToken by remember { mutableStateOf(false) }
     var isSyncingOfflineQueue by remember { mutableStateOf(false) }
 
+    var imapEmail by remember { mutableStateOf(currentSettings.imapEmail) }
+    var imapAppPassword by remember { mutableStateOf(currentSettings.imapAppPassword) }
+    var showImapPassword by remember { mutableStateOf(false) }
+    var imapTesting by remember { mutableStateOf(false) }
+    var imapTestResult by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
+    var isSyncingImap by remember { mutableStateOf(false) }
+
     // Yeh fix hai: Jab bhi cloud se data aayega, yeh saare boxes ko update kar dega
     LaunchedEffect(currentSettings) {
         geminiApiKey = currentSettings.geminiApiKey
@@ -179,6 +200,8 @@ fun SettingsScreen(
         twilioAccountSid = currentSettings.twilioAccountSid
         twilioAuthToken = currentSettings.twilioAuthToken
         twilioPhoneNumber = currentSettings.twilioPhoneNumber
+        imapEmail = currentSettings.imapEmail
+        imapAppPassword = currentSettings.imapAppPassword
     }
 
     // Dropdown toggles
@@ -320,6 +343,11 @@ fun SettingsScreen(
                 StatusPill(
                     label = "Brevo Email",
                     isConfigured = brevoApiKey.isNotBlank(),
+                    modifier = Modifier.weight(1f)
+                )
+                StatusPill(
+                    label = "IMAP Sync",
+                    isConfigured = currentSettings.isImapConfigured,
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -2219,6 +2247,262 @@ fun SettingsScreen(
             }
 
             // ==========================================
+            // IMAP Reply Sync (Gmail Inbox)
+            // ==========================================
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(CyberPrimary.copy(alpha = 0.2f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Email,
+                                contentDescription = null,
+                                tint = CyberPrimaryLight,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Column {
+                            Text(
+                                text = "IMAP Reply Sync (Gmail)",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Autonomous Inbox Polling & Reply Closer",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = CyberPrimaryLight
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = "Connects directly to your Gmail account via SSL to fetch real prospect replies, pass them to AI Closer for automated draft generation, and elevate CRM deal stages.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    OutlinedTextField(
+                        value = imapEmail,
+                        onValueChange = { imapEmail = it },
+                        label = { Text("Gmail Address (e.g. user@gmail.com)") },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("imap_email_input"),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email)
+                    )
+
+                    OutlinedTextField(
+                        value = imapAppPassword,
+                        onValueChange = { imapAppPassword = it },
+                        label = { Text("Gmail App Password (16 characters)") },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("imap_app_password_input"),
+                        singleLine = true,
+                        visualTransformation = if (showImapPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { showImapPassword = !showImapPassword }) {
+                                Icon(
+                                    imageVector = if (showImapPassword) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                    contentDescription = "Toggle password visibility"
+                                )
+                            }
+                        }
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                imapTesting = true
+                                imapTestResult = null
+                                viewModel.testImapConnection(imapEmail, imapAppPassword) { ok, msg ->
+                                    imapTesting = false
+                                    imapTestResult = Pair(ok, msg)
+                                }
+                            },
+                            enabled = !imapTesting && imapEmail.isNotBlank() && imapAppPassword.isNotBlank(),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("test_imap_button")
+                        ) {
+                            if (imapTesting) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Connecting...")
+                            } else {
+                                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Test IMAP")
+                            }
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                isSyncingImap = true
+                                viewModel.syncInboxReplies { count ->
+                                    isSyncingImap = false
+                                    scope.launch {
+                                        snackbarHostState.showSnackbar("IMAP sync finished. Processed $count replies.")
+                                    }
+                                }
+                            },
+                            enabled = !isSyncingImap && imapEmail.isNotBlank() && imapAppPassword.isNotBlank(),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("sync_imap_now_button")
+                        ) {
+                            if (isSyncingImap) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Syncing...")
+                            } else {
+                                Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Sync Inbox Now")
+                            }
+                        }
+                    }
+
+                    imapTestResult?.let { (success, msg) ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(
+                                    color = if (success) CyberSuccess.copy(alpha = 0.15f) else CyberError.copy(alpha = 0.15f),
+                                    shape = RoundedCornerShape(8.dp)
+                                )
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (success) Icons.Default.CheckCircle else Icons.Default.Error,
+                                contentDescription = null,
+                                tint = if (success) CyberSuccess else CyberError,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = msg,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (success) CyberSuccess else CyberError
+                            )
+                        }
+                    }
+                }
+            }
+
+            // ==========================================
+            // Data Backup & Restore (JSON)
+            // ==========================================
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(CyberSecondary.copy(alpha = 0.2f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Lock,
+                                contentDescription = null,
+                                tint = CyberSecondary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Column {
+                            Text(
+                                text = "Data Backup & Restore",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Local Portable JSON Database",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = CyberSecondary
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = "Export all local Tasks and CRM Pipeline clients to a JSON file saved in your phone's Downloads folder, or restore previously exported backups instantly.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = {
+                                viewModel.exportDataToJson(context) { success, msg ->
+                                    scope.launch {
+                                        snackbarHostState.showSnackbar(msg)
+                                    }
+                                }
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("export_data_button"),
+                            colors = ButtonDefaults.buttonColors(containerColor = CyberSecondary)
+                        ) {
+                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Export Data", fontWeight = FontWeight.Bold)
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                importLauncher.launch("*/*")
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("import_data_button")
+                        ) {
+                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Import Data", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+
+            // ==========================================
             // Save Settings Button
             // ==========================================
             Button(
@@ -2249,7 +2533,9 @@ fun SettingsScreen(
                         customEmailFooter = customEmailFooter.trim(),
                         twilioAccountSid = twilioAccountSid.trim(),
                         twilioAuthToken = twilioAuthToken.trim(),
-                        twilioPhoneNumber = twilioPhoneNumber.trim()
+                        twilioPhoneNumber = twilioPhoneNumber.trim(),
+                        imapEmail = imapEmail.trim(),
+                        imapAppPassword = imapAppPassword.trim()
                     )
                     viewModel.saveSettings(updated, context) { success, message ->
                         scope.launch {

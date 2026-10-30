@@ -58,6 +58,10 @@ class ClientRepository(
         }
     }
 
+    suspend fun restoreClients(clients: List<CrmClient>) = withContext(Dispatchers.IO) {
+        saveLocalClients(clients)
+    }
+
     fun observeClients(): Flow<List<CrmClient>> {
         // Ab sirf local memory se data aayega
         return localClientsFlow.asStateFlow()

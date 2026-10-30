@@ -68,6 +68,10 @@ class TaskRepository(
         }
     }
 
+    fun restoreTasks(tasks: List<Task>) {
+        saveLocalTasks(tasks)
+    }
+
     fun observeTasks(): Flow<List<Task>> {
         // Sirf local memory se data aayega, no Firebase
         return localTasksFlow.asStateFlow()

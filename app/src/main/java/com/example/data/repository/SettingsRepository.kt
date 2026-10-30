@@ -39,7 +39,10 @@ data class AppSettings(
     val customEmailFooter: String = "",
     val twilioAccountSid: String = "",
     val twilioAuthToken: String = "",
-    val twilioPhoneNumber: String = ""
+    val twilioPhoneNumber: String = "",
+    // IMAP Inbox Reply Sync
+    val imapEmail: String = "",
+    val imapAppPassword: String = ""
 ) {
     val isGeminiConfigured: Boolean
         get() = geminiApiKey.isNotBlank()
@@ -82,6 +85,9 @@ data class AppSettings(
 
     val isTwilioConfigured: Boolean
         get() = twilioAccountSid.isNotBlank() && twilioAuthToken.isNotBlank() && twilioPhoneNumber.isNotBlank()
+
+    val isImapConfigured: Boolean
+        get() = imapEmail.isNotBlank() && imapAppPassword.isNotBlank()
 }
 
 class SettingsRepository(
@@ -144,7 +150,9 @@ class SettingsRepository(
             customEmailFooter = preferences.getString("custom_email_footer", "").orEmpty(),
             twilioAccountSid = preferences.getString("twilio_account_sid", "").orEmpty(),
             twilioAuthToken = preferences.getString("twilio_auth_token", "").orEmpty(),
-            twilioPhoneNumber = preferences.getString("twilio_phone_number", "").orEmpty()
+            twilioPhoneNumber = preferences.getString("twilio_phone_number", "").orEmpty(),
+            imapEmail = preferences.getString("imap_email", "").orEmpty(),
+            imapAppPassword = preferences.getString("imap_app_password", "").orEmpty()
         )
     }
 
@@ -172,6 +180,8 @@ class SettingsRepository(
                 val cloudElevenLabs = document.getString("elevenlabs_api_key") ?: document.getString("elevenLabs_api_key")
                 val cloudBrevo = document.getString("brevo_api_key")
                 val cloudPaymentLink = document.getString("payment_link_url")
+                val cloudImapEmail = document.getString("imap_email")
+                val cloudImapPassword = document.getString("imap_app_password")
 
                 _settingsFlow.value = current.copy(
                     geminiApiKey = cloudGemini ?: current.geminiApiKey,
@@ -192,7 +202,9 @@ class SettingsRepository(
                     customEmailFooter = document.getString("custom_email_footer") ?: current.customEmailFooter,
                     twilioAccountSid = document.getString("twilio_account_sid") ?: current.twilioAccountSid,
                     twilioAuthToken = document.getString("twilio_auth_token") ?: current.twilioAuthToken,
-                    twilioPhoneNumber = document.getString("twilio_phone_number") ?: current.twilioPhoneNumber
+                    twilioPhoneNumber = document.getString("twilio_phone_number") ?: current.twilioPhoneNumber,
+                    imapEmail = cloudImapEmail ?: current.imapEmail,
+                    imapAppPassword = cloudImapPassword ?: current.imapAppPassword
                 )
             }
         } catch (e: CancellationException) {
@@ -230,6 +242,8 @@ class SettingsRepository(
             .putString("twilio_account_sid", settings.twilioAccountSid.trim())
             .putString("twilio_auth_token", settings.twilioAuthToken.trim())
             .putString("twilio_phone_number", settings.twilioPhoneNumber.trim())
+            .putString("imap_email", settings.imapEmail.trim())
+            .putString("imap_app_password", settings.imapAppPassword.trim())
             .apply()
 
         _settingsFlow.value = settings
@@ -260,7 +274,9 @@ class SettingsRepository(
                             "custom_email_footer" to settings.customEmailFooter.trim(),
                             "twilio_account_sid" to settings.twilioAccountSid.trim(),
                             "twilio_auth_token" to settings.twilioAuthToken.trim(),
-                            "twilio_phone_number" to settings.twilioPhoneNumber.trim()
+                            "twilio_phone_number" to settings.twilioPhoneNumber.trim(),
+                            "imap_email" to settings.imapEmail.trim(),
+                            "imap_app_password" to settings.imapAppPassword.trim()
                         )
                     ).await()
             } catch (e: Exception) {

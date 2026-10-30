@@ -32,11 +32,16 @@ import com.example.data.service.SearchExecutionResult
 import com.example.data.service.SearchProspectService
 import com.example.data.service.SeoAuditService
 import com.example.data.service.SeoReportResult
+import com.example.data.service.ImapEmailService
+import com.example.data.service.ReportGeneratorService
 import com.example.data.service.TwilioSmsService
 import com.example.util.BusinessEmailValidator
 import com.example.util.LiveWorkerLogStore
 import com.example.util.ProspectDeduplicator
 import com.example.worker.AutoPilotScheduler
+import com.example.worker.ImapSyncScheduler
+import android.net.Uri
+import android.os.Environment
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -46,7 +51,12 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.UUID
 
 sealed interface TasksUiState {
@@ -94,7 +104,9 @@ class DashboardViewModel(
     private val twilioService: TwilioSmsService = TwilioSmsService(),
     private val followUpEngine: FollowUpSequenceEngine = FollowUpSequenceEngine(),
     private val offlineSyncRepository: OfflineSyncQueueRepository? = null,
-    private val abTestingEngine: AbTestingEngine? = null
+    private val abTestingEngine: AbTestingEngine? = null,
+    private val imapService: ImapEmailService = ImapEmailService(),
+    private val reportGeneratorService: ReportGeneratorService = ReportGeneratorService()
 ) : ViewModel() {
 
     val liveTerminalEntries = LiveWorkerLogStore.entries
@@ -285,6 +297,9 @@ class DashboardViewModel(
                 settingsRepository.saveSettings(newSettings)
                 if (context != null && previous.autoPilotEnabled != newSettings.autoPilotEnabled) {
                     AutoPilotScheduler.schedule(context, newSettings.autoPilotEnabled)
+                }
+                if (context != null) {
+                    ImapSyncScheduler.schedule(context, newSettings.isImapConfigured)
                 }
                 val isGuest = runCatching { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser }.getOrNull() == null
                 val msg = if (isGuest) {
@@ -1131,6 +1146,36 @@ class DashboardViewModel(
                     }.toString()
                 )
             )
+
+            // Autonomous Fulfillment: Generate HTML Report and deliver via Brevo when marked Won or Paid
+            if (normalized.equals(DealPipelineStage.WON, ignoreCase = true) ||
+                normalized.equals("Won", ignoreCase = true) ||
+                normalized.equals("Paid", ignoreCase = true)
+            ) {
+                val targetClient = clients.value.find { it.id == clientId }
+                if (targetClient != null) {
+                    val currentConfig = settings.value
+                    val htmlReport = reportGeneratorService.generateHtmlReport(
+                        client = targetClient,
+                        agencyName = currentConfig.agencyName.ifBlank { "Autonomous AI Sales Agency" },
+                        bookingLink = currentConfig.bookingLinkUrl,
+                        customThankYou = "Thank you for partnering with us! We have initiated your deliverables."
+                    )
+                    clientRepository?.updateClientReport(clientId, htmlReport)
+                    LiveWorkerLogStore.record("ReportGenerator", "Generated HTML SEO Report for ${targetClient.name} (${targetClient.websiteUrl})")
+
+                    if (currentConfig.isBrevoConfigured && targetClient.email.isNotBlank()) {
+                        emailService.sendEmail(
+                            apiKey = currentConfig.brevoApiKey,
+                            toEmail = targetClient.email,
+                            subject = "Your SEO Audit & Strategy Report - ${targetClient.company.ifBlank { targetClient.websiteUrl }}",
+                            bodyText = "Please view your delivered report in HTML.",
+                            htmlContent = htmlReport
+                        )
+                        LiveWorkerLogStore.record("ReportGenerator", "Dispatched HTML Deliverable via Brevo to ${targetClient.email}")
+                    }
+                }
+            }
         }
     }
 
@@ -1736,5 +1781,195 @@ class DashboardViewModel(
         }
         return OutreachTone.values().firstOrNull { it.name.equals(savedTone, ignoreCase = true) }
             ?: OutreachTone.PROFESSIONAL
+    }
+
+    // ==========================================
+    // IMAP Inbox Reply Sync
+    // ==========================================
+
+    fun testImapConnection(
+        email: String,
+        appPassword: String,
+        onResult: (Boolean, String) -> Unit
+    ) {
+        viewModelScope.launch {
+            _isOperationLoading.value = true
+            try {
+                val res = imapService.testConnection(email.trim(), appPassword.trim())
+                if (res.isSuccess) {
+                    onResult(true, "IMAP connected successfully! Gmail inbox is reachable.")
+                } else {
+                    val err = res.exceptionOrNull()?.message ?: "IMAP connection failed"
+                    onResult(false, err)
+                }
+            } catch (e: Exception) {
+                onResult(false, e.message ?: "IMAP connection error")
+            } finally {
+                _isOperationLoading.value = false
+            }
+        }
+    }
+
+    fun syncInboxReplies(onComplete: ((Int) -> Unit)? = null) {
+        val config = settings.value
+        if (!config.isImapConfigured) {
+            LiveWorkerLogStore.record("IMAP Sync", "IMAP is not configured in Settings. Skipping.")
+            onComplete?.invoke(0)
+            return
+        }
+
+        viewModelScope.launch {
+            LiveWorkerLogStore.record("IMAP Sync", "Connecting to IMAP inbox for ${config.imapEmail}...")
+            val result = imapService.fetchUnseenReplies(config.imapEmail, config.imapAppPassword)
+            if (result.isFailure) {
+                val err = result.exceptionOrNull()?.message ?: "Unknown IMAP error"
+                LiveWorkerLogStore.record("IMAP Sync", "Sync error: $err")
+                onComplete?.invoke(0)
+                return@launch
+            }
+
+            val emails = result.getOrNull().orEmpty()
+            LiveWorkerLogStore.record("IMAP Sync", "Fetched ${emails.size} new replies from inbox.")
+            var processedCount = 0
+
+            for (email in emails) {
+                val draftResult = if (config.isAiConfigured) {
+                    runCatching {
+                        closerService.analyzeAndDraftReply(
+                            senderName = email.senderName,
+                            senderEmail = email.senderEmail,
+                            subject = email.subject,
+                            incomingMessage = email.body,
+                            geminiApiKey = config.geminiApiKey,
+                            openRouterApiKey = config.openRouterApiKey,
+                            geminiModel = config.geminiModel,
+                            openRouterModel = config.openRouterModel,
+                            paymentLinkUrl = config.paymentLinkUrl,
+                            bookingLinkUrl = config.bookingLinkUrl,
+                            agencyName = config.agencyName
+                        ).getOrNull()
+                    }.getOrNull()
+                } else null
+
+                val inboxEmail = InboxEmail(
+                    senderName = email.senderName,
+                    senderEmail = email.senderEmail,
+                    subject = email.subject,
+                    incomingMessage = email.body,
+                    objectionCategory = draftResult?.objectionCategory ?: "General Inquiry",
+                    draftedReply = draftResult?.draftedReply ?: "Thanks for getting back to us! Would you be open for a brief 10-minute chat this week? Booking link: ${config.bookingLinkUrl}",
+                    reasoningAnalysis = draftResult?.reasoningAnalysis.orEmpty(),
+                    reasoningStrategy = draftResult?.reasoningStrategy.orEmpty(),
+                    nextBestAction = draftResult?.nextBestAction.orEmpty(),
+                    receivedAt = email.receivedAt
+                )
+                inboxRepository?.upsertMessage(inboxEmail)
+
+                // Match sender to CRM client and elevate to INTERESTED
+                val existingClient = clients.value.find { c ->
+                    (c.email.isNotBlank() && c.email.equals(email.senderEmail, ignoreCase = true)) ||
+                    (email.senderEmail.contains(c.websiteUrl.replace("https://", "").replace("http://", "").take(10), ignoreCase = true))
+                }
+                if (existingClient != null) {
+                    clientRepository?.updateClientStatus(existingClient.id, DealPipelineStage.INTERESTED)
+                    LiveWorkerLogStore.record("IMAP Sync", "Elevated client ${existingClient.name} to INTERESTED based on email reply.")
+                }
+
+                processedCount++
+            }
+
+            LiveWorkerLogStore.record("IMAP Sync", "Completed inbox sync. Processed $processedCount emails.")
+            onComplete?.invoke(processedCount)
+        }
+    }
+
+    // ==========================================
+    // Data Backup / Restore (JSON)
+    // ==========================================
+
+    fun exportDataToJson(context: Context, onResult: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val currentTasks = tasksUiState.value.let {
+                    if (it is TasksUiState.Success) it.tasks else repository.observeTasks().first()
+                }
+                val currentClients = clients.value
+
+                val rootJson = JSONObject().apply {
+                    put("exportedAt", System.currentTimeMillis())
+                    put("version", 1)
+                    put("tasks", JSONArray().apply {
+                        currentTasks.forEach { put(it.toJson()) }
+                    })
+                    put("clients", JSONArray().apply {
+                        currentClients.forEach { put(it.toJson()) }
+                    })
+                }
+
+                val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+                val fileName = "autofreelancer_backup_$timestamp.json"
+
+                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                if (downloadsDir != null && !downloadsDir.exists()) {
+                    downloadsDir.mkdirs()
+                }
+
+                val targetFile = File(downloadsDir, fileName)
+                targetFile.writeText(rootJson.toString(2))
+
+                onResult(true, "Data exported successfully to Downloads/$fileName (${currentTasks.size} tasks, ${currentClients.size} clients)")
+            } catch (e: Exception) {
+                // Fallback to internal app storage
+                try {
+                    val fallbackFile = File(context.filesDir, "autofreelancer_backup.json")
+                    val currentTasks = repository.observeTasks().first()
+                    val currentClients = clients.value
+                    val rootJson = JSONObject().apply {
+                        put("exportedAt", System.currentTimeMillis())
+                        put("tasks", JSONArray().apply { currentTasks.forEach { put(it.toJson()) } })
+                        put("clients", JSONArray().apply { currentClients.forEach { put(it.toJson()) } })
+                    }
+                    fallbackFile.writeText(rootJson.toString(2))
+                    onResult(true, "Data exported to internal app storage (${fallbackFile.name}).")
+                } catch (fallbackEx: Exception) {
+                    onResult(false, "Export failed: ${e.message}")
+                }
+            }
+        }
+    }
+
+    fun importDataFromJson(context: Context, uri: Uri, onResult: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val content = context.contentResolver.openInputStream(uri)?.use { stream ->
+                    stream.bufferedReader().readText()
+                } ?: throw IllegalArgumentException("Could not read backup file")
+
+                val rootJson = JSONObject(content)
+                val tasksJson = rootJson.optJSONArray("tasks") ?: JSONArray()
+                val clientsJson = rootJson.optJSONArray("clients") ?: JSONArray()
+
+                val restoredTasks = mutableListOf<Task>()
+                for (i in 0 until tasksJson.length()) {
+                    restoredTasks.add(Task.fromJson(tasksJson.getJSONObject(i)))
+                }
+
+                val restoredClients = mutableListOf<CrmClient>()
+                for (i in 0 until clientsJson.length()) {
+                    restoredClients.add(CrmClient.fromJson(clientsJson.getJSONObject(i)))
+                }
+
+                if (restoredTasks.isNotEmpty()) {
+                    repository.restoreTasks(restoredTasks)
+                }
+                if (restoredClients.isNotEmpty()) {
+                    clientRepository?.restoreClients(restoredClients)
+                }
+
+                onResult(true, "Imported ${restoredTasks.size} tasks and ${restoredClients.size} clients successfully!")
+            } catch (e: Exception) {
+                onResult(false, "Failed to import data: ${e.message}")
+            }
+        }
     }
 }
