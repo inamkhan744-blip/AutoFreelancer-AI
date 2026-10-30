@@ -104,6 +104,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import com.example.data.model.Task
 import com.example.data.service.GeneratedVoiceNote
 import com.example.ui.theme.CyberError
@@ -121,7 +122,6 @@ import com.example.util.VoiceCommandState
 import com.example.util.WorkerLogEntry
 import java.text.NumberFormat
 import java.util.Locale
-import androidx.core.content.ContextCompat
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -142,7 +142,6 @@ fun DashboardScreen(
     val isAutoPilotActive by viewModel.isAutoPilotActive.collectAsState()
     val liveTerminalEntries by viewModel.liveTerminalEntries.collectAsState()
 
-    // FIXED: Firebase Auth removed for offline/login-free mode
     val userName = "Freelancer Director"
 
     val context = LocalContext.current
