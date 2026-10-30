@@ -68,7 +68,7 @@ class ImapEmailService {
     }
 
     /**
-     * Connects to IMAP inbox, finds unread/unseen messages, and extracts the sender, subject, and text content.
+     * Connects to IMAP inbox, finds unread messages, filters out spam/alerts, and extracts real client replies.
      */
     suspend fun fetchUnseenReplies(
         email: String,
@@ -104,8 +104,8 @@ class ImapEmailService {
             val messages = inbox.search(unseenTerm)
 
             val extractedList = mutableListOf<ImapMessage>()
-            // Process the latest 10 unread messages
-            val recentMessages = messages.reversed().take(10)
+            // Process the latest 15 unread messages
+            val recentMessages = messages.reversed().take(15)
 
             for (msg in recentMessages) {
                 val fromHeader = msg.from?.firstOrNull() as? InternetAddress
@@ -116,6 +116,36 @@ class ImapEmailService {
                 val subject = msg.subject?.trim().orEmpty().ifBlank { "(No Subject)" }
                 val receivedDate = msg.receivedDate?.time ?: msg.sentDate?.time ?: System.currentTimeMillis()
                 val body = extractBody(msg)
+
+                // ==========================================
+                // SMART FILTER: Bot/Alerts/Self ko ignore karein
+                // ==========================================
+                val lowerSender = senderEmail.lowercase()
+                val lowerSubject = subject.lowercase()
+                val lowerMyEmail = cleanEmail.lowercase()
+
+                val isSelfSent = lowerSender == lowerMyEmail
+                val isAutomated = lowerSender.contains("alert") || 
+                                  lowerSender.contains("noreply") || 
+                                  lowerSender.contains("no-reply") ||
+                                  lowerSender.contains("info") || 
+                                  lowerSender.contains("uptimerobot") ||
+                                  lowerSender.contains("notification") ||
+                                  lowerSender.contains("newsletter") ||
+                                  lowerSender.contains("mailer-daemon") ||
+                                  lowerSender.contains("support") ||
+                                  lowerSubject.contains("monitor is up") || 
+                                  lowerSubject.contains("monitor is down") ||
+                                  lowerSubject.contains("uptime")
+
+                if (isSelfSent || isAutomated) {
+                    Log.d(tag, "Skipped automated/self email: $lowerSender - $lowerSubject")
+                    if (markAsSeen) {
+                        msg.setFlag(Flags.Flag.SEEN, true)
+                    }
+                    continue // Agli email par jayen
+                }
+                // ==========================================
 
                 val messageId = msg.getHeader("Message-ID")?.firstOrNull()
                     ?: "msg_${System.currentTimeMillis()}_${senderEmail.hashCode()}"
