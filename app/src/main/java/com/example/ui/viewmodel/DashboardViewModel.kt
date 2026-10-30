@@ -286,9 +286,15 @@ class DashboardViewModel(
                 if (context != null && previous.autoPilotEnabled != newSettings.autoPilotEnabled) {
                     AutoPilotScheduler.schedule(context, newSettings.autoPilotEnabled)
                 }
-                onResult(true, "Settings saved to your Firebase account.")
+                val isGuest = runCatching { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser }.getOrNull() == null
+                val msg = if (isGuest) {
+                    "Settings & API keys saved locally to device."
+                } else {
+                    "Settings & API keys saved to your account."
+                }
+                onResult(true, msg)
             } catch (e: Exception) {
-                onResult(false, e.message ?: "Unable to save settings to Firebase.")
+                onResult(false, e.message ?: "Unable to save settings.")
             }
         }
     }
@@ -826,6 +832,28 @@ class DashboardViewModel(
         }
     }
 
+    fun testBraveKey(key: String, onResult: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            val result = searchService.testBrave(key)
+            if (result.isSuccess) {
+                onResult(true, result.getOrThrow())
+            } else {
+                onResult(false, result.exceptionOrNull()?.message ?: "Brave Search test failed")
+            }
+        }
+    }
+
+    fun testGoogleCseKey(key: String, cx: String, onResult: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            val result = searchService.testGoogleCse(key, cx)
+            if (result.isSuccess) {
+                onResult(true, result.getOrThrow())
+            } else {
+                onResult(false, result.exceptionOrNull()?.message ?: "Google Custom Search test failed")
+            }
+        }
+    }
+
     fun createCustomTask(
         title: String,
         category: String,
@@ -861,39 +889,97 @@ class DashboardViewModel(
     fun runLeadDiscovery(customQuery: String? = null) {
         viewModelScope.launch {
             val currentConfig = settings.value
-            val queryToRun = customQuery ?: currentConfig.searchQuery
-            LiveWorkerLogStore.record("Apollo-Scout", "> Searching Reddit, LinkedIn, and web results...")
+
+            // 1. Daily Targets & Quota Enforcement
+            val calendar = java.util.Calendar.getInstance().apply {
+                set(java.util.Calendar.HOUR_OF_DAY, 0)
+                set(java.util.Calendar.MINUTE, 0)
+                set(java.util.Calendar.SECOND, 0)
+                set(java.util.Calendar.MILLISECOND, 0)
+            }
+            val todayStart = calendar.timeInMillis
+            val allExistingClients = clientRepository?.observeClients()?.first().orEmpty()
+            val todayLeadsCount = allExistingClients.count { it.createdAt >= todayStart }
+
+            if (todayLeadsCount >= currentConfig.dailyLeadTarget) {
+                val quotaMessage = "Daily target achieved ($todayLeadsCount/${currentConfig.dailyLeadTarget} leads). Sleeping until tomorrow."
+                LiveWorkerLogStore.record("Apollo-Scout", "> $quotaMessage")
+                _discoveryProgress.value = LeadDiscoveryProgress(
+                    isRunning = false,
+                    stepMessage = quotaMessage,
+                    prospects = emptyList()
+                )
+                return@launch
+            }
+
+            // 2. Dynamic Search Queries
+            val dynamicQueries = listOf(
+                "\"need SEO audit\" \"@gmail.com\" OR \"@yahoo.com\"",
+                "site:reddit.com \"hiring SEO\" OR \"need SEO help\"",
+                "\"SEO expert needed\" \"contact me\"",
+                "site:linkedin.com \"looking for SEO audit\"",
+                "\"looking for website redesign\" \"@gmail.com\"",
+                "\"need web developer\" \"budget\" \"@gmail.com\"",
+                "\"recommend an SEO agency\" site:twitter.com OR site:x.com"
+            )
+            val queryToRun = customQuery ?: dynamicQueries.random()
+            LiveWorkerLogStore.record("Apollo-Scout", "> Selected targeted query: $queryToRun")
 
             _discoveryProgress.value = LeadDiscoveryProgress(
                 isRunning = true,
-                stepMessage = "Querying Search API for active SEO audit requests...",
+                stepMessage = "Querying Serper, Brave, and Google CSE for active prospects...",
                 error = null
             )
 
+            // 3. Multi-Engine Search Execution
             val searchResult = searchService.searchWithFallback(
                 query = queryToRun,
                 serperKey = currentConfig.serperApiKey,
-                tavilyKey = currentConfig.tavilyApiKey
+                tavilyKey = currentConfig.tavilyApiKey,
+                braveKey = currentConfig.braveSearchApiKey,
+                googleApiKey = currentConfig.googleCustomSearchApiKey,
+                googleCseCx = currentConfig.googleCseCx
             )
 
             val knownProspects = ProspectDeduplicator(
                 tasks = repository.observeTasks().first(),
-                clients = clientRepository?.observeClients()?.first().orEmpty()
+                clients = allExistingClients
             )
-            val qualifiedProspects = searchResult.leads.mapNotNull { prospect ->
-                val discoveredEmail = BusinessEmailValidator.findIn("${prospect.snippet}\n${prospect.title}")
-                    ?: return@mapNotNull null
+
+            // 4. The Email Hunter: Deep scraping & validation
+            val qualifiedProspects = mutableListOf<Pair<ProspectResult, String>>()
+            for (prospect in searchResult.leads) {
+                // Step A: Inspect title and snippet for direct emails
+                var discoveredEmail = BusinessEmailValidator.findIn("${prospect.snippet}\n${prospect.title}")
+                    ?: searchService.findValidEmail("${prospect.snippet}\n${prospect.title}")
+
+                // Step B: Deep Scraping website and contact pages
+                if (discoveredEmail.isNullOrBlank()) {
+                    val targetSite = CompetitorSpyPrompt.websiteFor(prospect).ifBlank { prospect.link }
+                    LiveWorkerLogStore.record("Apollo-Scout", "> [Email Hunter] Deep scraping contact pages on $targetSite...")
+                    discoveredEmail = searchService.extractEmailFromWebsite(targetSite)
+                }
+
+                if (discoveredEmail.isNullOrBlank()) {
+                    LiveWorkerLogStore.record(
+                        "Apollo-Scout",
+                        "> [Email Hunter] No valid business email found for ${prospect.title.take(30)}. Skipping lead."
+                    )
+                    continue
+                }
+
                 if (knownProspects.contains(prospect.link, discoveredEmail)) {
                     LiveWorkerLogStore.record(
                         "Apollo-Scout",
                         "> Skipping existing prospect: ${prospect.link}"
                     )
-                    null
-                } else {
-                    knownProspects.remember(prospect.link, discoveredEmail)
-                    prospect to discoveredEmail
+                    continue
                 }
+
+                knownProspects.remember(prospect.link, discoveredEmail)
+                qualifiedProspects.add(prospect to discoveredEmail)
             }
+
             val prospects = qualifiedProspects.map { it.first }
             if (prospects.isEmpty()) {
                 _discoveryProgress.value = LeadDiscoveryProgress(
@@ -911,7 +997,8 @@ class DashboardViewModel(
             )
 
             val generatedPitches = mutableListOf<GeneratedPitch>()
-            val targetProspects = qualifiedProspects.take(3)
+            val remainingQuota = (currentConfig.dailyLeadTarget - todayLeadsCount).coerceAtLeast(1)
+            val targetProspects = qualifiedProspects.take(remainingQuota.coerceAtMost(3))
 
             for ((index, qualifiedProspect) in targetProspects.withIndex()) {
                 val (prospect, discoveredEmail) = qualifiedProspect

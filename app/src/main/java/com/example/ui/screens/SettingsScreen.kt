@@ -129,6 +129,11 @@ fun SettingsScreen(
     var brevoApiKey by remember { mutableStateOf(currentSettings.brevoApiKey) }
     var serperApiKey by remember { mutableStateOf(currentSettings.serperApiKey) }
     var tavilyApiKey by remember { mutableStateOf(currentSettings.tavilyApiKey) }
+    var braveSearchApiKey by remember { mutableStateOf(currentSettings.braveSearchApiKey) }
+    var googleCustomSearchApiKey by remember { mutableStateOf(currentSettings.googleCustomSearchApiKey) }
+    var googleCseCx by remember { mutableStateOf(currentSettings.googleCseCx) }
+    var dailyLeadTarget by remember { mutableStateOf(currentSettings.dailyLeadTarget.toString()) }
+    var dailyRevenueTarget by remember { mutableStateOf(currentSettings.dailyRevenueTarget.toString()) }
     var paymentLinkUrl by remember { mutableStateOf(currentSettings.paymentLinkUrl) }
     var autoPilotEnabled by remember { mutableStateOf(currentSettings.autoPilotEnabled) }
     var searchQuery by remember { mutableStateOf(currentSettings.searchQuery) }
@@ -155,6 +160,11 @@ fun SettingsScreen(
         brevoApiKey = currentSettings.brevoApiKey
         serperApiKey = currentSettings.serperApiKey
         tavilyApiKey = currentSettings.tavilyApiKey
+        braveSearchApiKey = currentSettings.braveSearchApiKey
+        googleCustomSearchApiKey = currentSettings.googleCustomSearchApiKey
+        googleCseCx = currentSettings.googleCseCx
+        dailyLeadTarget = currentSettings.dailyLeadTarget.toString()
+        dailyRevenueTarget = currentSettings.dailyRevenueTarget.toString()
         paymentLinkUrl = currentSettings.paymentLinkUrl
         autoPilotEnabled = currentSettings.autoPilotEnabled
         searchQuery = currentSettings.searchQuery
@@ -181,6 +191,8 @@ fun SettingsScreen(
     var showBrevoKey by remember { mutableStateOf(false) }
     var showSerperKey by remember { mutableStateOf(false) }
     var showTavilyKey by remember { mutableStateOf(false) }
+    var showBraveKey by remember { mutableStateOf(false) }
+    var showGoogleKey by remember { mutableStateOf(false) }
     var showElevenLabsKey by remember { mutableStateOf(false) }
 
     // Test connection states
@@ -195,6 +207,12 @@ fun SettingsScreen(
 
     var serperTesting by remember { mutableStateOf(false) }
     var serperTestResult by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
+
+    var braveTesting by remember { mutableStateOf(false) }
+    var braveTestResult by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
+
+    var googleCseTesting by remember { mutableStateOf(false) }
+    var googleCseTestResult by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
 
     var tavilyTesting by remember { mutableStateOf(false) }
     var tavilyTestResult by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
@@ -1561,7 +1579,239 @@ fun SettingsScreen(
             }
 
             // ==========================================
-            // 5. Tavily Search API Key (Backup search)
+            // 5. Brave Search API Key
+            // ==========================================
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(CircleShape)
+                                .background(CyberPrimary.copy(alpha = 0.2f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Search,
+                                contentDescription = null,
+                                tint = CyberPrimary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                text = "5. Brave Search API Key",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+                            Text(
+                                text = "Independent, privacy-first search index for finding untapped leads",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = "Queries Brave's independent web index directly to uncover active client discussions and RFP inquiries.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    OutlinedTextField(
+                        value = braveSearchApiKey,
+                        onValueChange = {
+                            braveSearchApiKey = it
+                            braveTestResult = null
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("brave_api_key_input"),
+                        label = { Text("Brave Search API Key") },
+                        placeholder = { Text("BSA...") },
+                        visualTransformation = if (showBraveKey) VisualTransformation.None else PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        trailingIcon = {
+                            IconButton(onClick = { showBraveKey = !showBraveKey }) {
+                                Icon(
+                                    imageVector = if (showBraveKey) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                    contentDescription = "Toggle Brave key visibility"
+                                )
+                            }
+                        },
+                        singleLine = true
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                if (braveSearchApiKey.isBlank()) {
+                                    braveTestResult = Pair(false, "Please enter a Brave Search API key first")
+                                    return@OutlinedButton
+                                }
+                                braveTesting = true
+                                braveTestResult = null
+                                viewModel.testBraveKey(braveSearchApiKey) { success, msg ->
+                                    braveTesting = false
+                                    braveTestResult = Pair(success, msg)
+                                }
+                            },
+                            enabled = !braveTesting && braveSearchApiKey.isNotBlank(),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            if (braveTesting) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Testing...", fontSize = 12.sp)
+                            } else {
+                                Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Test Brave Search", fontSize = 12.sp)
+                            }
+                        }
+
+                        braveTestResult?.let { (success, msg) ->
+                            InlineStatusBadge(success = success, message = msg)
+                        }
+                    }
+                }
+            }
+
+            // ==========================================
+            // 6. Google Custom Search (CSE)
+            // ==========================================
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(CircleShape)
+                                .background(CyberSecondary.copy(alpha = 0.2f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.TravelExplore,
+                                contentDescription = null,
+                                tint = CyberSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                text = "6. Google Custom Search Engine (CSE)",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+                            Text(
+                                text = "Official Google CSE API + Search Engine ID (CX)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    OutlinedTextField(
+                        value = googleCustomSearchApiKey,
+                        onValueChange = {
+                            googleCustomSearchApiKey = it
+                            googleCseTestResult = null
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("google_custom_search_api_key_input"),
+                        label = { Text("Google Custom Search API Key") },
+                        placeholder = { Text("AIzaSy...") },
+                        visualTransformation = if (showGoogleKey) VisualTransformation.None else PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        trailingIcon = {
+                            IconButton(onClick = { showGoogleKey = !showGoogleKey }) {
+                                Icon(
+                                    imageVector = if (showGoogleKey) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                    contentDescription = "Toggle Google key visibility"
+                                )
+                            }
+                        },
+                        singleLine = true
+                    )
+
+                    OutlinedTextField(
+                        value = googleCseCx,
+                        onValueChange = {
+                            googleCseCx = it
+                            googleCseTestResult = null
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("google_cse_cx_input"),
+                        label = { Text("Google CSE ID (CX)") },
+                        placeholder = { Text("e.g. 0123456789abcdef:example") },
+                        singleLine = true
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                if (googleCustomSearchApiKey.isBlank() || googleCseCx.isBlank()) {
+                                    googleCseTestResult = Pair(false, "Enter both Google API Key and CX")
+                                    return@OutlinedButton
+                                }
+                                googleCseTesting = true
+                                googleCseTestResult = null
+                                viewModel.testGoogleCseKey(googleCustomSearchApiKey, googleCseCx) { success, msg ->
+                                    googleCseTesting = false
+                                    googleCseTestResult = Pair(success, msg)
+                                }
+                            },
+                            enabled = !googleCseTesting && googleCustomSearchApiKey.isNotBlank() && googleCseCx.isNotBlank(),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            if (googleCseTesting) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Testing...", fontSize = 12.sp)
+                            } else {
+                                Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Test Google CSE", fontSize = 12.sp)
+                            }
+                        }
+
+                        googleCseTestResult?.let { (success, msg) ->
+                            InlineStatusBadge(success = success, message = msg)
+                        }
+                    }
+                }
+            }
+
+            // ==========================================
+            // 7. Tavily Search API Key (Backup search)
             // ==========================================
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -1592,7 +1842,7 @@ fun SettingsScreen(
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text(
-                                text = "5. Tavily Search API Key",
+                                text = "7. Tavily Search API Key",
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                             )
                             Text(
@@ -1719,6 +1969,84 @@ fun SettingsScreen(
                             )
                         }
                     }
+                }
+            }
+
+            // ==========================================
+            // Daily Targets & Quotas
+            // ==========================================
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(CyberSuccess.copy(alpha = 0.2f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CheckCircle,
+                                contentDescription = null,
+                                tint = CyberSuccess,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Column {
+                            Text(
+                                text = "Daily Targets & Goal Setting",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Autonomous pacing and daily quota controls",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = "Once Apollo-Scout discovers your daily lead target today, it gracefully pauses outreach until tomorrow.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    OutlinedTextField(
+                        value = dailyLeadTarget,
+                        onValueChange = { dailyLeadTarget = it.filter { char -> char.isDigit() } },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("daily_lead_target_input"),
+                        label = { Text("Daily Lead Target (Prospects / Day)") },
+                        placeholder = { Text("5") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true
+                    )
+
+                    OutlinedTextField(
+                        value = dailyRevenueTarget,
+                        onValueChange = { dailyRevenueTarget = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("daily_revenue_target_input"),
+                        label = { Text("Daily Revenue Target ($)") },
+                        placeholder = { Text("100.0") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true
+                    )
                 }
             }
 
@@ -1903,6 +2231,11 @@ fun SettingsScreen(
                         brevoApiKey = brevoApiKey.trim(),
                         serperApiKey = serperApiKey.trim(),
                         tavilyApiKey = tavilyApiKey.trim(),
+                        braveSearchApiKey = braveSearchApiKey.trim(),
+                        googleCustomSearchApiKey = googleCustomSearchApiKey.trim(),
+                        googleCseCx = googleCseCx.trim(),
+                        dailyLeadTarget = dailyLeadTarget.toIntOrNull() ?: 5,
+                        dailyRevenueTarget = dailyRevenueTarget.toDoubleOrNull() ?: 100.0,
                         paymentLinkUrl = paymentLinkUrl.trim(),
                         autoPilotEnabled = autoPilotEnabled,
                         searchQuery = searchQuery.trim(),

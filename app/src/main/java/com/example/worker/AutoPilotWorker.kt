@@ -77,25 +77,53 @@ class AutoPilotWorker(
 
             val canRunDiscovery = settings.isSearchConfigured || settings.isAiConfigured
             if (pendingTasks.isEmpty() && canRunDiscovery) {
+                val calendar = java.util.Calendar.getInstance().apply {
+                    set(java.util.Calendar.HOUR_OF_DAY, 0)
+                    set(java.util.Calendar.MINUTE, 0)
+                    set(java.util.Calendar.SECOND, 0)
+                    set(java.util.Calendar.MILLISECOND, 0)
+                }
+                val todayStart = calendar.timeInMillis
+                val existingClients = clientRepo.observeClients().first()
+                val todayCount = existingClients.count { it.createdAt >= todayStart }
+                if (todayCount >= settings.dailyLeadTarget) {
+                    LiveWorkerLogStore.record(
+                        "Apollo-Scout",
+                        "> Daily target achieved ($todayCount/${settings.dailyLeadTarget} leads). Sleeping until tomorrow."
+                    )
+                    return Result.success()
+                }
+
                 Log.i(tag, "Running autonomous lead discovery in background...")
-                LiveWorkerLogStore.record("Apollo-Scout", "> Scraping Reddit, LinkedIn, and web search results...")
+                LiveWorkerLogStore.record("Apollo-Scout", "> Querying Serper, Brave, and Google CSE for active prospects...")
 
                 val searchResult = searchService.searchWithFallback(
                     query = "need SEO help site:reddit.com OR site:linkedin.com",
                     serperKey = settings.serperApiKey,
-                    tavilyKey = settings.tavilyApiKey
+                    tavilyKey = settings.tavilyApiKey,
+                    braveKey = settings.braveSearchApiKey,
+                    googleApiKey = settings.googleCustomSearchApiKey,
+                    googleCseCx = settings.googleCseCx
                 )
 
                 LiveWorkerLogStore.record("Apollo-Scout", "> Discovery provider used: ${searchResult.providerUsed}")
 
-                val existingClients = clientRepo.observeClients().first()
                 val existingTasks = taskRepo.observeTasks().first()
                 val deduplicator = ProspectDeduplicator(tasks = existingTasks, clients = existingClients)
 
                 var newLeadsCount = 0
                 for (prospect in searchResult.leads) {
                     val targetWebsite = extractWebsiteUrl(prospect.snippet)
-                    val discoveredEmail = BusinessEmailValidator.findIn(prospect.snippet).orEmpty()
+                    var discoveredEmail = BusinessEmailValidator.findIn(prospect.snippet).orEmpty()
+                    if (discoveredEmail.isBlank()) {
+                        val siteToScrape = targetWebsite.ifBlank { prospect.link }
+                        discoveredEmail = searchService.extractEmailFromWebsite(siteToScrape).orEmpty()
+                    }
+
+                    if (discoveredEmail.isBlank()) {
+                        LiveWorkerLogStore.record("Apollo-Scout", "> [Email Hunter] Skipping lead without email: ${prospect.title.take(30)}")
+                        continue
+                    }
 
                     if (deduplicator.contains(
                             url = targetWebsite.ifBlank { prospect.link },
