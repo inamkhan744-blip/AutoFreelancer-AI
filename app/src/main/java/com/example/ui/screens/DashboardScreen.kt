@@ -277,13 +277,23 @@ fun DashboardScreen(
                         )
                     }
                     IconButton(
+                        onClick = { viewModel.navigateTo("ANALYTICS") },
+                        modifier = Modifier.testTag("analytics_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.TrendingUp,
+                            contentDescription = "Client Conversion Analytics",
+                            tint = CyberTertiary
+                        )
+                    }
+                    IconButton(
                         onClick = onNavigateToSettings,
                         modifier = Modifier.testTag("settings_button")
                     ) {
                         Icon(
                             imageVector = Icons.Default.Settings,
                             contentDescription = "Settings & API Keys",
-                            tint = CyberTertiary
+                            tint = CyberPrimaryLight
                         )
                     }
                     IconButton(

@@ -27,6 +27,11 @@ import com.example.data.service.ElevenLabsVoiceService
 import com.example.data.service.EmailAttachment
 import com.example.data.service.FollowUpSequenceEngine
 import com.example.data.service.GeneratedPitch
+import com.example.data.model.ClosureTrendPoint
+import com.example.data.model.ConversionAnalyticsSummary
+import com.example.data.model.PipelineFunnelStage
+import com.example.data.model.ResponseTimeDistribution
+import com.example.data.service.GeneratedTemplate
 import com.example.data.service.GeneratedVoiceNote
 import com.example.data.service.SearchExecutionResult
 import com.example.data.service.SearchProspectService
@@ -175,6 +180,134 @@ class DashboardViewModel(
     val pipelineTotalValue: StateFlow<Double> = clients.map { list ->
         list.sumOf { it.estimatedValue }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.0)
+
+    val unresponsiveLeads: StateFlow<List<CrmClient>> = clients.map { list ->
+        list.filter { it.isUnresponsive48Hours }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val pipelineFunnelStages: StateFlow<List<PipelineFunnelStage>> = clients.map { list ->
+        val total = list.size.coerceAtLeast(1)
+        val stages = listOf(
+            DealPipelineStage.NEW to "1. Discovered",
+            DealPipelineStage.PITCHED to "2. Pitched",
+            DealPipelineStage.FOLLOW_UP to "3. Follow-Up",
+            DealPipelineStage.INTERESTED to "4. Interested",
+            DealPipelineStage.CALL_BOOKED to "5. Call Booked",
+            DealPipelineStage.PROPOSAL_SENT to "6. Proposal Sent",
+            DealPipelineStage.WON to "7. Closed Won"
+        )
+
+        var cumulativeRemaining = list.size
+        stages.mapIndexed { index, (stageKey, display) ->
+            val stageClients = list.filter { DealPipelineStage.normalize(it.pipelineStage) == stageKey }
+            val count = stageClients.size
+            val stageVal = stageClients.sumOf { it.estimatedValue }
+            val convRate = (count.toFloat() / total.toFloat()) * 100f
+            val dropOff = if (index > 0 && cumulativeRemaining > 0) {
+                ((cumulativeRemaining - count).toFloat() / cumulativeRemaining.toFloat() * 100f).coerceAtLeast(0f)
+            } else 0f
+            cumulativeRemaining -= count
+            PipelineFunnelStage(
+                stage = stageKey,
+                displayName = display,
+                count = count,
+                totalValue = stageVal,
+                conversionRate = convRate,
+                dropOffRate = dropOff
+            )
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val conversionAnalyticsSummary: StateFlow<ConversionAnalyticsSummary> = clients.map { list ->
+        val total = list.size
+        val wonList = list.filter { DealPipelineStage.normalize(it.pipelineStage) == DealPipelineStage.WON }
+        val wonCount = wonList.size
+        val winRate = if (total > 0) (wonCount.toFloat() / total.toFloat()) * 100f else 0f
+        val totalPipelineVal = list.sumOf { it.estimatedValue }
+        val totalWonRev = wonList.sumOf { it.estimatedValue }
+        val avgDealSize = if (wonCount > 0) totalWonRev / wonCount else if (total > 0) totalPipelineVal / total else 0.0
+        val unresp = list.count { it.isUnresponsive48Hours }
+
+        val avgLatencyHours = if (list.isNotEmpty()) {
+            list.map { client ->
+                val elapsed = (client.updatedAt - client.createdAt).coerceAtLeast(0)
+                java.util.concurrent.TimeUnit.MILLISECONDS.toHours(elapsed).toDouble()
+            }.average().coerceAtLeast(4.5)
+        } else 0.0
+
+        ConversionAnalyticsSummary(
+            totalLeads = total,
+            wonLeads = wonCount,
+            winRatePercent = winRate,
+            totalPipelineValue = totalPipelineVal,
+            totalWonRevenue = totalWonRev,
+            avgResponseTimeHours = avgLatencyHours,
+            avgDealSize = avgDealSize,
+            unresponsiveCount = unresp
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ConversionAnalyticsSummary())
+
+    val responseTimeDistribution: StateFlow<List<ResponseTimeDistribution>> = clients.map { list ->
+        val total = list.size.coerceAtLeast(1)
+        var under12 = 0
+        var between12And24 = 0
+        var between24And48 = 0
+        var over48 = 0
+
+        list.forEach { c ->
+            val hours = c.hoursInactive
+            when {
+                hours < 12 -> under12++
+                hours < 24 -> between12And24++
+                hours < 48 -> between24And48++
+                else -> over48++
+            }
+        }
+
+        listOf(
+            ResponseTimeDistribution("< 12 Hours", under12, (under12.toFloat() / total) * 100f, 0xFF00F56AL),
+            ResponseTimeDistribution("12 - 24 Hours", between12And24, (between12And24.toFloat() / total) * 100f, 0xFF00E5FFL),
+            ResponseTimeDistribution("24 - 48 Hours", between24And48, (between24And48.toFloat() / total) * 100f, 0xFFFFB300L),
+            ResponseTimeDistribution("48+ Hours (Inactive)", over48, (over48.toFloat() / total) * 100f, 0xFFFF4081L)
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val closureTrendPoints: StateFlow<List<ClosureTrendPoint>> = clients.map { list ->
+        val dateFormat = java.text.SimpleDateFormat("MMM dd", java.util.Locale.US)
+        val points = mutableListOf<ClosureTrendPoint>()
+
+        for (i in 6 downTo 0) {
+            val cal = java.util.Calendar.getInstance().apply {
+                add(java.util.Calendar.DAY_OF_YEAR, -i)
+                set(java.util.Calendar.HOUR_OF_DAY, 0)
+                set(java.util.Calendar.MINUTE, 0)
+                set(java.util.Calendar.SECOND, 0)
+                set(java.util.Calendar.MILLISECOND, 0)
+            }
+            val startMs = cal.timeInMillis
+            val endMs = startMs + java.util.concurrent.TimeUnit.DAYS.toMillis(1)
+            val dayLabel = dateFormat.format(cal.time)
+
+            val wonInPeriod = list.filter {
+                DealPipelineStage.normalize(it.pipelineStage) == DealPipelineStage.WON &&
+                it.updatedAt in startMs..endMs
+            }
+            val periodWonCount = wonInPeriod.size
+            val periodRevenue = wonInPeriod.sumOf { it.estimatedValue }
+            val periodLeads = list.count { it.createdAt in startMs..endMs }.coerceAtLeast(1)
+            val periodWinRate = (periodWonCount.toFloat() / periodLeads.toFloat()) * 100f
+
+            points.add(
+                ClosureTrendPoint(
+                    dateLabel = dayLabel,
+                    wonCount = periodWonCount,
+                    revenue = periodRevenue,
+                    winRate = periodWinRate
+                )
+            )
+        }
+        points
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // Gemini Models state
     private val _availableGeminiModels = MutableStateFlow<List<String>>(
@@ -1483,6 +1616,125 @@ class DashboardViewModel(
             } else {
                 onResult(false, "Brevo delivery failed: ${res.exceptionOrNull()?.message ?: "Unknown error"}")
             }
+        }
+    }
+
+    fun draft48HourCheckIn(
+        client: CrmClient,
+        onResult: (Boolean, GeneratedTemplate?, String) -> Unit
+    ) {
+        viewModelScope.launch {
+            _isOperationLoading.value = true
+            try {
+                val config = settings.value
+                val template = followUpEngine.generate48HourCheckInWithGemini(
+                    client = client,
+                    aiService = aiService,
+                    geminiApiKey = config.geminiApiKey,
+                    openRouterApiKey = config.openRouterApiKey,
+                    geminiModel = config.geminiModel,
+                    openRouterModel = config.openRouterModel,
+                    agencyName = config.agencyName,
+                    bookingLink = config.bookingLinkUrl,
+                    customFooter = config.customEmailFooter
+                )
+                onResult(true, template, "Drafted personalized 48-hour check-in via Gemini")
+            } catch (e: Exception) {
+                onResult(false, null, e.message ?: "Failed to draft check-in message")
+            } finally {
+                _isOperationLoading.value = false
+            }
+        }
+    }
+
+    fun send48HourCheckInEmail(
+        client: CrmClient,
+        template: GeneratedTemplate,
+        onResult: (Boolean, String) -> Unit
+    ) {
+        viewModelScope.launch {
+            val config = settings.value
+            val targetEmail = client.email.trim()
+            if (targetEmail.isBlank()) {
+                onResult(false, "Client email is required.")
+                return@launch
+            }
+
+            val htmlBody = emailService.buildHtmlEmailBody(template.body, emptyList())
+            val res = emailService.sendEmail(
+                apiKey = config.brevoApiKey,
+                toEmail = targetEmail,
+                subject = template.subject,
+                bodyText = template.body,
+                htmlContent = htmlBody
+            )
+
+            val now = System.currentTimeMillis()
+            val updatedClient = client.copy(
+                sequenceStage = "48H_CHECKIN",
+                pipelineStage = DealPipelineStage.FOLLOW_UP,
+                lastContactedAt = now,
+                updatedAt = now
+            )
+            clientRepository?.upsertClient(updatedClient)
+
+            if (res.isSuccess) {
+                LiveWorkerLogStore.record("AI Follow-Up", "> Sent personalized 48-hour check-in to ${client.name} ($targetEmail)")
+                onResult(true, "Sent 48-hour check-in to $targetEmail via Brevo!")
+            } else {
+                onResult(false, "Brevo delivery failed: ${res.exceptionOrNull()?.message ?: "Check Brevo API key"}")
+            }
+        }
+    }
+
+    fun scheduleAll48HourCheckIns(onComplete: (Int, String) -> Unit) {
+        viewModelScope.launch {
+            val list = unresponsiveLeads.value
+            if (list.isEmpty()) {
+                onComplete(0, "No leads currently unresponsive (48+ hours).")
+                return@launch
+            }
+
+            val config = settings.value
+            var dispatched = 0
+            for (client in list) {
+                if (client.email.isBlank()) continue
+                val template = followUpEngine.generate48HourCheckInWithGemini(
+                    client = client,
+                    aiService = aiService,
+                    geminiApiKey = config.geminiApiKey,
+                    openRouterApiKey = config.openRouterApiKey,
+                    geminiModel = config.geminiModel,
+                    openRouterModel = config.openRouterModel,
+                    agencyName = config.agencyName,
+                    bookingLink = config.bookingLinkUrl,
+                    customFooter = config.customEmailFooter
+                )
+
+                if (config.brevoApiKey.isNotBlank()) {
+                    val html = emailService.buildHtmlEmailBody(template.body, emptyList())
+                    emailService.sendEmail(
+                        apiKey = config.brevoApiKey,
+                        toEmail = client.email.trim(),
+                        subject = template.subject,
+                        bodyText = template.body,
+                        htmlContent = html
+                    )
+                }
+
+                val now = System.currentTimeMillis()
+                val updated = client.copy(
+                    sequenceStage = "48H_CHECKIN",
+                    pipelineStage = DealPipelineStage.FOLLOW_UP,
+                    lastContactedAt = now,
+                    updatedAt = now
+                )
+                clientRepository?.upsertClient(updated)
+                dispatched++
+                LiveWorkerLogStore.record("AutoPilot 48h", "> Scheduled 48-hour check-in for ${client.name} (${client.email})")
+            }
+
+            onComplete(dispatched, "Processed $dispatched unresponsive leads with personalized 48-hour check-ins.")
         }
     }
 

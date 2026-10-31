@@ -261,4 +261,87 @@ class FollowUpSequenceEngine {
             else -> false
         }
     }
+
+    suspend fun generate48HourCheckInWithGemini(
+        client: CrmClient,
+        aiService: AiOrchestrationService,
+        geminiApiKey: String,
+        openRouterApiKey: String,
+        geminiModel: String = "gemini-3.8-flash",
+        openRouterModel: String = "meta-llama/llama-3.3-70b-instruct:free",
+        agencyName: String = "Apex Growth Agency",
+        bookingLink: String = "",
+        customFooter: String = ""
+    ): GeneratedTemplate {
+        val clientName = client.name.ifBlank { "there" }
+        val website = client.websiteUrl.ifBlank { "your site" }
+        val agency = agencyName.ifBlank { "Apex Growth Agency" }
+
+        val systemPrompt = """
+            You are an elite B2B Sales Outreach Director for $agency.
+            You are writing an ultra-personalized, polite, concise 48-hour 'check-in' email to an unresponsive lead.
+            The lead was previously pitched 48+ hours ago and has not replied yet.
+            Your tone must be warm, respectful, low-friction, and zero-fluff (under 120 words).
+            Never sound needy, aggressive, or passive-aggressive. Offer a low-commitment next step.
+            Format your response STRICTLY with these two lines:
+            SUBJECT: <personalized punchy subject line referencing client or website>
+            BODY: <the exact body text of the check-in email>
+        """.trimIndent()
+
+        val userPrompt = """
+            Lead Name: $clientName
+            Company / Website: $website
+            Enrichment / Context: ${client.enrichmentNotes.ifBlank { "SEO & Growth Optimization" }}
+            Booking Link: ${bookingLink.ifBlank { "Reply directly to this email" }}
+            Hours Inactive: ${client.hoursInactive.coerceAtLeast(48)} hours
+
+            Draft the 48-hour check-in follow-up message now.
+        """.trimIndent()
+
+        val aiResult = aiService.generateContentWithFallback(
+            geminiApiKey = geminiApiKey,
+            openRouterApiKey = openRouterApiKey,
+            geminiModel = geminiModel,
+            openRouterModel = openRouterModel,
+            systemPrompt = systemPrompt,
+            userPrompt = userPrompt,
+            temperature = 0.5,
+            maxTokens = 400
+        )
+
+        val rawText = aiResult.getOrNull()?.content?.trim().orEmpty()
+        if (rawText.isNotBlank() && rawText.contains("SUBJECT:", ignoreCase = true) && rawText.contains("BODY:", ignoreCase = true)) {
+            val lines = rawText.lines()
+            val subjectLine = lines.firstOrNull { it.startsWith("SUBJECT:", ignoreCase = true) }
+                ?.substringAfter(":")?.trim() ?: "Quick check-in on $website"
+            val bodyStartIndex = lines.indexOfFirst { it.startsWith("BODY:", ignoreCase = true) }
+            val bodyText = if (bodyStartIndex != -1) {
+                val firstBodyLine = lines[bodyStartIndex].substringAfter(":", "").trim()
+                val remaining = lines.drop(bodyStartIndex + 1).joinToString("\n")
+                if (firstBodyLine.isNotBlank()) "$firstBodyLine\n$remaining".trim() else remaining.trim()
+            } else {
+                rawText.substringAfter("BODY:", rawText).trim()
+            }
+
+            val finalBody = if (customFooter.isNotBlank()) "$bodyText\n\n$customFooter" else bodyText
+            return GeneratedTemplate(subject = subjectLine, body = finalBody)
+        }
+
+        // Intelligent Fallback Template if offline / unconfigured
+        val fallbackSubject = "Quick check-in regarding $website"
+        val fallbackBody = buildString {
+            append("Hi $clientName,\n\n")
+            append("I wanted to quickly check in to see if you had a moment to look over the notes I sent regarding $website a couple of days ago.\n\n")
+            append("I know how quickly inboxes fill up, so no rush at all. If it's easier, I'd be happy to record a quick 3-minute video walkthrough of the top 3 highest-impact fixes for your team.\n\n")
+            if (bookingLink.isNotBlank()) {
+                append("Alternatively, you can pick a quick 10-minute slot on my calendar here: $bookingLink\n\n")
+            } else {
+                append("Just reply 'video' and I'll send it right over.\n\n")
+            }
+            append("Best regards,\n$agency\n")
+            if (customFooter.isNotBlank()) append("\n$customFooter")
+        }
+
+        return GeneratedTemplate(subject = fallbackSubject, body = fallbackBody)
+    }
 }

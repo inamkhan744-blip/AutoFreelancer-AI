@@ -49,6 +49,7 @@ import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Sms
+import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -204,6 +205,17 @@ fun ClientsCrmScreen(
                             imageVector = Icons.Default.Description,
                             contentDescription = "Export CRM Data (JSON)",
                             tint = CyberTertiary
+                        )
+                    }
+
+                    IconButton(
+                        onClick = { viewModel.navigateTo("ANALYTICS") },
+                        modifier = Modifier.testTag("crm_analytics_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.TrendingUp,
+                            contentDescription = "Conversion Analytics",
+                            tint = CyberSecondary
                         )
                     }
 

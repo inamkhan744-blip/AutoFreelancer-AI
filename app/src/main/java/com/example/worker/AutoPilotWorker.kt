@@ -290,6 +290,41 @@ class AutoPilotWorker(
                     )
                     clientRepo.upsertClient(updatedClient)
                 }
+
+                // Automated 48-hour check-in for unresponsive leads
+                if (client.isUnresponsive48Hours && client.sequenceStage != "48H_CHECKIN" && settings.brevoApiKey.isNotBlank()) {
+                    val checkInTemplate = followUpEngine.generate48HourCheckInWithGemini(
+                        client = client,
+                        aiService = AiOrchestrationService(),
+                        geminiApiKey = settings.geminiApiKey,
+                        openRouterApiKey = settings.openRouterApiKey,
+                        geminiModel = settings.geminiModel,
+                        openRouterModel = settings.openRouterModel,
+                        agencyName = settings.agencyName,
+                        bookingLink = settings.bookingLinkUrl,
+                        customFooter = settings.customEmailFooter
+                    )
+
+                    val html = emailService.buildHtmlEmailBody(checkInTemplate.body, emptyList())
+                    val checkInRes = emailService.sendEmail(
+                        apiKey = settings.brevoApiKey,
+                        toEmail = client.email,
+                        subject = checkInTemplate.subject,
+                        bodyText = checkInTemplate.body,
+                        htmlContent = html
+                    )
+
+                    if (checkInRes.isSuccess) {
+                        LiveWorkerLogStore.record("AutoPilot 48h", "> Dispatched Gemini check-in to ${client.name} (${client.email})")
+                        val updated = client.copy(
+                            sequenceStage = "48H_CHECKIN",
+                            pipelineStage = DealPipelineStage.FOLLOW_UP,
+                            lastContactedAt = now,
+                            updatedAt = now
+                        )
+                        clientRepo.upsertClient(updated)
+                    }
+                }
             }
         } catch (e: Exception) {
             Log.w(tag, "CRM multi-stage follow-up cadence error: ${e.message}")

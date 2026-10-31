@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.MarkEmailUnread
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.CircularProgressIndicator
@@ -45,6 +46,7 @@ import com.example.data.repository.OfflineSyncQueueRepository
 import com.example.data.repository.SettingsRepository
 import com.example.data.repository.TaskRepository
 import com.example.data.service.AbTestingEngine
+import com.example.ui.screens.ClientConversionAnalyticsScreen
 import com.example.ui.screens.ClientDeliverablesScreen
 import com.example.ui.screens.ClientPortalScreen
 import com.example.ui.screens.ClientsCrmScreen
@@ -54,6 +56,7 @@ import com.example.ui.screens.SettingsScreen
 import com.example.ui.theme.AutoFreelancerTheme
 import com.example.ui.theme.CyberPrimary
 import com.example.ui.theme.CyberSecondary
+import com.example.ui.theme.CyberTertiary
 import com.example.ui.viewmodel.DashboardViewModel
 
 class MainActivity : ComponentActivity() {
@@ -176,12 +179,12 @@ fun AppRootContent() {
                     colors = NavigationBarItemDefaults.colors(selectedIconColor = CyberPrimary, selectedTextColor = CyberPrimary, indicatorColor = CyberPrimary.copy(alpha = 0.15f))
                 )
                 NavigationBarItem(
-                    icon = { Icon(Icons.Default.Description, contentDescription = "Deliverables") },
-                    label = { Text("Deliverables") },
-                    selected = currentScreen == "DELIVERABLES",
-                    onClick = { dashboardViewModel.navigateTo("DELIVERABLES") },
-                    modifier = Modifier.testTag("nav_tab_deliverables"),
-                    colors = NavigationBarItemDefaults.colors(selectedIconColor = CyberPrimary, selectedTextColor = CyberPrimary, indicatorColor = CyberPrimary.copy(alpha = 0.15f))
+                    icon = { Icon(Icons.Default.TrendingUp, contentDescription = "Analytics") },
+                    label = { Text("Analytics") },
+                    selected = currentScreen == "ANALYTICS",
+                    onClick = { dashboardViewModel.navigateTo("ANALYTICS") },
+                    modifier = Modifier.testTag("nav_tab_analytics"),
+                    colors = NavigationBarItemDefaults.colors(selectedIconColor = CyberTertiary, selectedTextColor = CyberTertiary, indicatorColor = CyberTertiary.copy(alpha = 0.15f))
                 )
                 NavigationBarItem(
                     icon = { Icon(Icons.Default.Settings, contentDescription = "Settings") },
@@ -204,6 +207,7 @@ fun AppRootContent() {
                 "CLIENTS" -> ClientsCrmScreen(viewModel = dashboardViewModel, onNavigateBack = { dashboardViewModel.navigateTo("DASHBOARD") })
                 "CLIENT_PORTAL" -> ClientPortalScreen(viewModel = dashboardViewModel, client = selectedPortalClient, onNavigateBack = { dashboardViewModel.closeClientPortal() })
                 "DELIVERABLES" -> ClientDeliverablesScreen(viewModel = dashboardViewModel, onNavigateBack = { dashboardViewModel.navigateTo("DASHBOARD") })
+                "ANALYTICS" -> ClientConversionAnalyticsScreen(viewModel = dashboardViewModel, onNavigateBack = { dashboardViewModel.navigateTo("DASHBOARD") })
                 "SETTINGS" -> SettingsScreen(viewModel = dashboardViewModel, onNavigateBack = { dashboardViewModel.navigateTo("DASHBOARD") })
                 else -> DashboardScreen(viewModel = dashboardViewModel, onNavigateToSettings = { dashboardViewModel.navigateTo("SETTINGS") }, onSignOutClicked = { dashboardViewModel.refreshTasks() })
             }

@@ -157,7 +157,7 @@ class ImapEmailService {
                             senderName = senderName,
                             senderEmail = senderEmail,
                             subject = subject,
-                            body = body,
+                            body = stripQuotedText(body),
                             receivedAt = receivedDate
                         )
                     )
@@ -174,6 +174,42 @@ class ImapEmailService {
             Log.e(tag, "Failed to fetch IMAP replies: ${e.message}", e)
             Result.failure(e)
         }
+    }
+
+    /**
+     * Strips historical quoted text (e.g. "On Fri, 30 Oct... wrote:", "> quote", etc.)
+     * so the AI Closer only analyzes the client's newly authored reply.
+     */
+    fun stripQuotedText(body: String): String {
+        val lines = body.lines()
+        val cleanedLines = mutableListOf<String>()
+
+        for (line in lines) {
+            val trimmed = line.trim()
+
+            // Skip blockquote lines starting with >
+            if (trimmed.startsWith(">")) continue
+
+            // Stop at standard "On ... wrote:" pattern
+            if (trimmed.matches(Regex("(?i)^on\\s+[\\s\\S]*?wrote:?$"))) break
+
+            // Stop at email client separator lines
+            if (trimmed.matches(Regex("(?i)^[-_]{2,}\\s*original message\\s*[-_]{2,}.*$"))) break
+            if (trimmed.matches(Regex("(?i)^[-_]{2,}\\s*forwarded message\\s*[-_]{2,}.*$"))) break
+
+            // Stop at Outlook header block "From: ... Sent: ... To: ..."
+            if (trimmed.startsWith("From:", ignoreCase = true) && cleanedLines.isNotEmpty()) break
+
+            // Skip standard mobile device signatures
+            if (trimmed.startsWith("Sent from my", ignoreCase = true) ||
+                trimmed.startsWith("Get Outlook for", ignoreCase = true)) {
+                continue
+            }
+
+            cleanedLines.add(line)
+        }
+
+        return cleanedLines.joinToString("\n").trim()
     }
 
     private fun extractBody(part: Any): String {

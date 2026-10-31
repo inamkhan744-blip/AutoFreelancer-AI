@@ -76,6 +76,17 @@ data class CrmClient(
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 ) {
+    val isUnresponsive48Hours: Boolean
+        get() {
+            val normalized = DealPipelineStage.normalize(pipelineStage)
+            if (normalized == DealPipelineStage.WON || normalized == DealPipelineStage.LOST) return false
+            val elapsed = System.currentTimeMillis() - lastContactedAt
+            return elapsed >= TimeUnit.HOURS.toMillis(48)
+        }
+
+    val hoursInactive: Long
+        get() = TimeUnit.MILLISECONDS.toHours(System.currentTimeMillis() - lastContactedAt).coerceAtLeast(0)
+
     fun toMap(): Map<String, Any> {
         return mapOf(
             "id" to id,
