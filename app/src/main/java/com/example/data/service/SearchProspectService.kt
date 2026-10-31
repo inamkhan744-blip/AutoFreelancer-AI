@@ -62,7 +62,11 @@ class SearchProspectService(
         googleCseCx: String = "",
         tavilyKey: String = ""
     ): SearchExecutionResult = withContext(Dispatchers.IO) {
-        val searchQuery = searchVariations(query).random()
+        val searchQuery = if (query.contains("\"") || query.contains("site:") || query.contains("@") || query.contains("OR")) {
+            query.trim()
+        } else {
+            searchVariations(query).random()
+        }
         val cleanSerper = serperKey.trim()
         val cleanBrave = braveKey.trim()
         val cleanGoogle = googleApiKey.trim()
@@ -128,8 +132,10 @@ class SearchProspectService(
             }
         }
 
-        // Deduplicate prospects by link
-        val deduplicated = allProspects.distinctBy { it.link.trim().lowercase() }
+        // Filter out agency results and deduplicate prospects by link
+        val deduplicated = allProspects
+            .filterNot { isAgency(it.title, it.snippet, it.link) }
+            .distinctBy { it.link.trim().lowercase() }
 
         if (deduplicated.isNotEmpty()) {
             val enriched = enrichLeads(deduplicated.take(6))
@@ -636,9 +642,31 @@ class SearchProspectService(
         )
     }
 
-    private companion object {
+    companion object {
         val SEARCH_INTENT_WORDS = setOf(
             "a", "an", "for", "hire", "hiring", "looking", "need", "seeking"
         )
+
+        val KNOWN_AGENCY_DOMAINS = setOf(
+            "smartsites.com", "webfx.com", "victoriousseo.com", "ignitevisibility.com",
+            "straightnorth.com", "coalitiontechnologies.com", "outerboxdesign.com",
+            "directiveconsulting.com", "singleorigin.com", "neilpatel.com", "semrush.com",
+            "ahrefs.com", "moz.com", "hubspot.com", "clutch.co", "upcity.com", "goodfirms.co",
+            "searchengineland.com", "searchenginejournal.com"
+        )
+
+        fun isAgency(title: String, snippet: String, link: String): Boolean {
+            val lowerLink = link.lowercase()
+            if (KNOWN_AGENCY_DOMAINS.any { lowerLink.contains(it) }) return true
+
+            val lowerText = "$title $snippet".lowercase()
+            val agencyPhrases = listOf(
+                "award-winning seo agency", "top seo agency", "leading seo company",
+                "seo agency", "digital marketing agency", "full-service digital agency",
+                "we are an agency", "our agency", "our digital marketing services",
+                "seo services company", "best seo company", "best seo agencies"
+            )
+            return agencyPhrases.any { lowerText.contains(it) }
+        }
     }
 }

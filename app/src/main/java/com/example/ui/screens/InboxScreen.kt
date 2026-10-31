@@ -122,6 +122,7 @@ fun InboxScreen(
     val inboxEmails by viewModel.inboxEmails.collectAsState()
     var statusFilter by remember { mutableStateOf("ALL") } // ALL, "Awaiting Review", "Approved & Sent", "Dismissed"
     var showScenarioDropdown by remember { mutableStateOf(false) }
+    var isSyncingImap by remember { mutableStateOf(false) }
 
     val awaitingCount = inboxEmails.count { it.status == "Awaiting Review" }
     val approvedCount = inboxEmails.count { it.status == "Approved & Sent" }
@@ -242,6 +243,36 @@ fun InboxScreen(
                                         snackbarHostState.showSnackbar("Simulated in-house objection email received.")
                                     }
                                 }
+                            )
+                        }
+                    }
+
+                    IconButton(
+                        onClick = {
+                            isSyncingImap = true
+                            viewModel.syncInboxReplies { count ->
+                                isSyncingImap = false
+                                scope.launch {
+                                    snackbarHostState.showSnackbar(
+                                        if (count > 0) "IMAP Sync: $count replies processed & analyzed by AI Closer!"
+                                        else "IMAP Sync completed: No new unseen replies found."
+                                    )
+                                }
+                            }
+                        },
+                        modifier = Modifier.testTag("sync_imap_button")
+                    ) {
+                        if (isSyncingImap) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                                color = CyberSecondary
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.Email,
+                                contentDescription = "Sync Gmail IMAP Inbox",
+                                tint = CyberSecondary
                             )
                         }
                     }

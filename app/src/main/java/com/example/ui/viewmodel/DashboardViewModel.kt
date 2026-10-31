@@ -157,6 +157,25 @@ class DashboardViewModel(
     private val _discoveryProgress = MutableStateFlow(LeadDiscoveryProgress())
     val discoveryProgress: StateFlow<LeadDiscoveryProgress> = _discoveryProgress.asStateFlow()
 
+    fun dismissDiscoveryProgress() {
+        _discoveryProgress.value = LeadDiscoveryProgress(isRunning = false)
+    }
+
+    val todayLeadCount: StateFlow<Int> = clients.map { list ->
+        val calendar = java.util.Calendar.getInstance().apply {
+            set(java.util.Calendar.HOUR_OF_DAY, 0)
+            set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }
+        val startOfDay = calendar.timeInMillis
+        list.count { it.createdAt >= startOfDay }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
+    val pipelineTotalValue: StateFlow<Double> = clients.map { list ->
+        list.sumOf { it.estimatedValue }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.0)
+
     // Gemini Models state
     private val _availableGeminiModels = MutableStateFlow<List<String>>(
         listOf("gemini-3.8-flash", "gemini-3.6-flash", "gemini-2.5-flash")
@@ -927,15 +946,13 @@ class DashboardViewModel(
                 return@launch
             }
 
-            // 2. Dynamic Search Queries
+            // 2. Dynamic Search Queries (Seeking clients who need help, not agencies)
             val dynamicQueries = listOf(
-                "\"need SEO audit\" \"@gmail.com\" OR \"@yahoo.com\"",
-                "site:reddit.com \"hiring SEO\" OR \"need SEO help\"",
-                "\"SEO expert needed\" \"contact me\"",
-                "site:linkedin.com \"looking for SEO audit\"",
-                "\"looking for website redesign\" \"@gmail.com\"",
-                "\"need web developer\" \"budget\" \"@gmail.com\"",
-                "\"recommend an SEO agency\" site:twitter.com OR site:x.com"
+                "\"need SEO audit\" \"@gmail.com\"",
+                "site:reddit.com \"hiring SEO expert\" OR \"need SEO help\"",
+                "\"looking for SEO freelancer\" \"contact me\"",
+                "\"my website traffic dropped\" \"need help\"",
+                "\"need someone to do SEO\" site:linkedin.com"
             )
             val queryToRun = customQuery ?: dynamicQueries.random()
             LiveWorkerLogStore.record("Apollo-Scout", "> Selected targeted query: $queryToRun")
@@ -964,6 +981,15 @@ class DashboardViewModel(
             // 4. The Email Hunter: Deep scraping & validation
             val qualifiedProspects = mutableListOf<Pair<ProspectResult, String>>()
             for (prospect in searchResult.leads) {
+                // Pre-check: Skip SEO agencies (like SmartSites) to only hunt prospective clients
+                if (SearchProspectService.isAgency(prospect.title, prospect.snippet, prospect.link)) {
+                    LiveWorkerLogStore.record(
+                        "Apollo-Scout",
+                        "> [Agency Filter] Skipped agency: ${prospect.title.take(30)} (${prospect.link})"
+                    )
+                    continue
+                }
+
                 // Step A: Inspect title and snippet for direct emails
                 var discoveredEmail = BusinessEmailValidator.findIn("${prospect.snippet}\n${prospect.title}")
                     ?: searchService.findValidEmail("${prospect.snippet}\n${prospect.title}")

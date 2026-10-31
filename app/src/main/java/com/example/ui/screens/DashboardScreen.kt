@@ -53,6 +53,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.RocketLaunch
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Stop
@@ -106,6 +107,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.example.data.model.Task
+import com.example.data.service.GeneratedPitch
 import com.example.data.service.GeneratedVoiceNote
 import com.example.ui.theme.CyberError
 import com.example.ui.theme.CyberPrimary
@@ -115,6 +117,7 @@ import com.example.ui.theme.CyberTertiary
 import com.example.ui.theme.CyberWarning
 import com.example.ui.viewmodel.DashboardMetrics
 import com.example.ui.viewmodel.DashboardViewModel
+import com.example.ui.viewmodel.LeadDiscoveryProgress
 import com.example.ui.viewmodel.TasksUiState
 import com.example.ui.viewmodel.WorkerNotification
 import com.example.util.JarvisVoiceManager
@@ -141,6 +144,10 @@ fun DashboardScreen(
     val isOperationLoading by viewModel.isOperationLoading.collectAsState()
     val isAutoPilotActive by viewModel.isAutoPilotActive.collectAsState()
     val liveTerminalEntries by viewModel.liveTerminalEntries.collectAsState()
+    val discoveryProgress by viewModel.discoveryProgress.collectAsState()
+    val todayLeadCount by viewModel.todayLeadCount.collectAsState()
+    val pipelineTotalValue by viewModel.pipelineTotalValue.collectAsState()
+    val settings by viewModel.settings.collectAsState()
 
     val userName = "Freelancer Director"
 
@@ -400,6 +407,55 @@ fun DashboardScreen(
                 }
 
                 LiveTerminalPanel(entries = liveTerminalEntries)
+
+                LeadDiscoveryShowcaseCard(
+                    progress = discoveryProgress,
+                    onDismiss = { viewModel.dismissDiscoveryProgress() },
+                    onSendPitch = { pitch ->
+                        val targetProspect = discoveryProgress.prospects.find {
+                            it.title.contains(pitch.prospectNameOrCompany, ignoreCase = true) ||
+                            pitch.personalizedPitchMessage.contains(it.link)
+                        }
+                        val email = targetProspect?.enrichment?.url?.let { "" } ?: ""
+                        viewModel.sendEmailToClient(
+                            toEmail = email.ifBlank { "client@${pitch.prospectNameOrCompany.lowercase().replace(" ", "")}.com" },
+                            subject = pitch.subjectLine,
+                            bodyText = pitch.personalizedPitchMessage
+                        ) { success, msg ->
+                            Toast.makeText(context, if (success) "Pitch dispatched via Brevo!" else msg, Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onSaveToCrm = { pitch ->
+                        viewModel.createCustomTask(
+                            title = "Pitch: ${pitch.prospectNameOrCompany}",
+                            category = "OUTREACH",
+                            workerName = "Sophia AI",
+                            workerRole = "Lead Closer",
+                            client = pitch.prospectNameOrCompany,
+                            clientEmail = "client@${pitch.prospectNameOrCompany.lowercase().replace(" ", "")}.com",
+                            estimatedValue = pitch.suggestedRateOrValue,
+                            details = pitch.personalizedPitchMessage,
+                            priority = "HIGH"
+                        )
+                        Toast.makeText(context, "Saved ${pitch.prospectNameOrCompany} to CRM & Tasks!", Toast.LENGTH_SHORT).show()
+                    }
+                )
+
+                ExecutiveAgencyGoalsHeader(
+                    todayLeadCount = todayLeadCount,
+                    dailyLeadTarget = settings.dailyLeadTarget,
+                    pipelineTotalValue = pipelineTotalValue,
+                    dailyRevenueTarget = settings.dailyRevenueTarget,
+                    isAutoPilotActive = isAutoPilotActive,
+                    onLeadScoutClicked = { viewModel.runLeadDiscovery() },
+                    onSyncImapClicked = {
+                        viewModel.syncInboxReplies { count ->
+                            Toast.makeText(context, "IMAP Sync completed: $count replies", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onToggleAutoPilot = onNavigateToSettings,
+                    onNewTaskClicked = { viewModel.openCreateTaskDialog() }
+                )
 
                 if (isWideScreen) {
                     Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -756,6 +812,389 @@ private fun LiveTerminalPanel(entries: List<WorkerLogEntry>) {
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun LeadDiscoveryShowcaseCard(
+    progress: LeadDiscoveryProgress,
+    onDismiss: () -> Unit,
+    onSendPitch: (GeneratedPitch) -> Unit,
+    onSaveToCrm: (GeneratedPitch) -> Unit
+) {
+    if (progress.isRunning) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 6.dp)
+                .testTag("lead_scout_running_card"),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF071510)),
+            border = androidx.compose.foundation.BorderStroke(1.dp, CyberSecondary.copy(alpha = 0.8f))
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(14.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        color = CyberSecondary,
+                        strokeWidth = 2.5.dp
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "AI Lead Scout & Hunter Active",
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                            color = CyberSecondary
+                        )
+                        Text(
+                            text = progress.stepMessage.ifBlank { "Querying Serper, Brave, and Google CSE with Gemini..." },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFFE2E8F0),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth().height(4.dp),
+                    color = CyberSecondary,
+                    trackColor = CyberSecondary.copy(alpha = 0.2f)
+                )
+            }
+        }
+    } else if (progress.generatedPitches.isNotEmpty()) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 6.dp)
+                .testTag("lead_scout_showcase_card"),
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)),
+            border = androidx.compose.foundation.BorderStroke(1.5.dp, CyberSecondary)
+        ) {
+            Column(modifier = Modifier.padding(14.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(28.dp)
+                                .clip(CircleShape)
+                                .background(CyberSecondary.copy(alpha = 0.2f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = null,
+                                tint = CyberSecondary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                        Column {
+                            Text(
+                                text = "Discovered Leads & Live Pitches",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = CyberSecondary
+                            )
+                            Text(
+                                text = "${progress.generatedPitches.size} verified prospects found & enriched",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.size(32.dp).testTag("dismiss_discovery_showcase")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Dismiss Showcase",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    progress.generatedPitches.forEachIndexed { index, pitch ->
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("discovered_pitch_card_$index"),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = pitch.prospectNameOrCompany,
+                                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(CyberTertiary.copy(alpha = 0.15f))
+                                            .padding(horizontal = 8.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(
+                                            text = "$${pitch.suggestedRateOrValue.toInt()} Quote",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                            color = CyberTertiary
+                                        )
+                                    }
+                                }
+
+                                if (pitch.auditHooks.isNotEmpty()) {
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        pitch.auditHooks.take(2).forEach { hook ->
+                                            Box(
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(4.dp))
+                                                    .background(CyberPrimary.copy(alpha = 0.12f))
+                                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                                            ) {
+                                                Text(
+                                                    text = hook.take(35),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = CyberPrimary,
+                                                    fontSize = 10.sp,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = pitch.personalizedPitchMessage,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 3,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Button(
+                                        onClick = { onSendPitch(pitch) },
+                                        modifier = Modifier.weight(1f).testTag("pitch_send_brevo_$index"),
+                                        shape = RoundedCornerShape(8.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = CyberSecondary, contentColor = Color.Black)
+                                    ) {
+                                        Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(14.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Send Pitch", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                    OutlinedButton(
+                                        onClick = { onSaveToCrm(pitch) },
+                                        modifier = Modifier.weight(1f).testTag("pitch_save_crm_$index"),
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(14.dp), tint = CyberTertiary)
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Save CRM", fontSize = 12.sp)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ExecutiveAgencyGoalsHeader(
+    todayLeadCount: Int,
+    dailyLeadTarget: Int,
+    pipelineTotalValue: Double,
+    dailyRevenueTarget: Double,
+    isAutoPilotActive: Boolean,
+    onLeadScoutClicked: () -> Unit,
+    onSyncImapClicked: () -> Unit,
+    onToggleAutoPilot: () -> Unit,
+    onNewTaskClicked: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp)
+            .testTag("executive_agency_goals_header"),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "AGENCY DAILY TARGETS",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold
+                    ),
+                    color = CyberPrimary
+                )
+                Text(
+                    text = "Pipeline: $${pipelineTotalValue.toInt()}",
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                    color = CyberTertiary
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Lead Goal
+                Column(modifier = Modifier.weight(1f)) {
+                    val safeLeadTarget = dailyLeadTarget.coerceAtLeast(1)
+                    val leadRatio = (todayLeadCount.toFloat() / safeLeadTarget).coerceIn(0f, 1f)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Leads Today",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 11.sp
+                        )
+                        Text(
+                            text = "$todayLeadCount / $safeLeadTarget",
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                            fontSize = 11.sp
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    LinearProgressIndicator(
+                        progress = { leadRatio },
+                        modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
+                        color = CyberPrimary,
+                        trackColor = CyberPrimary.copy(alpha = 0.15f)
+                    )
+                }
+
+                // Revenue Goal
+                Column(modifier = Modifier.weight(1f)) {
+                    val safeRevTarget = if (dailyRevenueTarget <= 0.0) 100.0 else dailyRevenueTarget
+                    val revRatio = (pipelineTotalValue.toFloat() / safeRevTarget.toFloat()).coerceIn(0f, 1f)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Revenue Goal",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 11.sp
+                        )
+                        Text(
+                            text = "$${pipelineTotalValue.toInt()} / $${safeRevTarget.toInt()}",
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                            fontSize = 11.sp
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    LinearProgressIndicator(
+                        progress = { revRatio },
+                        modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
+                        color = CyberTertiary,
+                        trackColor = CyberTertiary.copy(alpha = 0.15f)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // 4 Executive Quick Action buttons
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onLeadScoutClicked,
+                    modifier = Modifier.weight(1f).testTag("quick_action_lead_scout"),
+                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = CyberSecondary, modifier = Modifier.size(13.dp))
+                    Spacer(modifier = Modifier.width(3.dp))
+                    Text("Scout", fontSize = 11.sp, maxLines = 1)
+                }
+                OutlinedButton(
+                    onClick = onSyncImapClicked,
+                    modifier = Modifier.weight(1f).testTag("quick_action_sync_imap"),
+                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Icon(Icons.Default.Email, contentDescription = null, tint = CyberPrimaryLight, modifier = Modifier.size(13.dp))
+                    Spacer(modifier = Modifier.width(3.dp))
+                    Text("IMAP", fontSize = 11.sp, maxLines = 1)
+                }
+                OutlinedButton(
+                    onClick = onToggleAutoPilot,
+                    modifier = Modifier.weight(1f).testTag("quick_action_autopilot"),
+                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Icon(
+                        Icons.Default.SmartToy,
+                        contentDescription = null,
+                        tint = if (isAutoPilotActive) CyberTertiary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(13.dp)
+                    )
+                    Spacer(modifier = Modifier.width(3.dp))
+                    Text(if (isAutoPilotActive) "Auto: ON" else "Auto: OFF", fontSize = 11.sp, maxLines = 1)
+                }
+                OutlinedButton(
+                    onClick = onNewTaskClicked,
+                    modifier = Modifier.weight(1f).testTag("quick_action_new_task"),
+                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null, tint = CyberTertiary, modifier = Modifier.size(13.dp))
+                    Spacer(modifier = Modifier.width(3.dp))
+                    Text("Task", fontSize = 11.sp, maxLines = 1)
                 }
             }
         }

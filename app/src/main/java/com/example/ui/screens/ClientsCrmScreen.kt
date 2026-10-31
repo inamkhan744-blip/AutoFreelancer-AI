@@ -191,6 +191,23 @@ fun ClientsCrmScreen(
                 },
                 actions = {
                     IconButton(
+                        onClick = {
+                            viewModel.exportDataToJson(context) { success, msg ->
+                                scope.launch {
+                                    snackbarHostState.showSnackbar(msg)
+                                }
+                            }
+                        },
+                        modifier = Modifier.testTag("export_crm_data_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Description,
+                            contentDescription = "Export CRM Data (JSON)",
+                            tint = CyberTertiary
+                        )
+                    }
+
+                    IconButton(
                         onClick = { showAddDialog = true },
                         modifier = Modifier.testTag("add_client_button")
                     ) {
