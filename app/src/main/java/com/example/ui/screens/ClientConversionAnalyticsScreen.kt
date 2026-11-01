@@ -87,6 +87,7 @@ import com.example.data.model.CrmClient
 import com.example.data.model.PipelineFunnelStage
 import com.example.data.model.ResponseTimeDistribution
 import com.example.data.service.GeneratedTemplate
+import com.example.ui.components.MonthlyIncomeTrendsCard
 import com.example.ui.theme.CyberError
 import com.example.ui.theme.CyberPrimary
 import com.example.ui.theme.CyberPrimaryLight
@@ -117,6 +118,7 @@ fun ClientConversionAnalyticsScreen(
     val funnelStages by viewModel.pipelineFunnelStages.collectAsState()
     val responseTimes by viewModel.responseTimeDistribution.collectAsState()
     val closuresOverTime by viewModel.closureTrendPoints.collectAsState()
+    val monthlyIncomeTrends by viewModel.monthlyIncomeTrends.collectAsState()
     val unresponsiveLeads by viewModel.unresponsiveLeads.collectAsState()
     val isOperationLoading by viewModel.isOperationLoading.collectAsState()
 
@@ -507,7 +509,12 @@ fun ClientConversionAnalyticsScreen(
                 }
             }
 
-            // 4. 48-Hour Inactivity Follow-Up Action Center
+            // 4. Monthly Income Trends (Recharts)
+            item {
+                MonthlyIncomeTrendsCard(monthlyPoints = monthlyIncomeTrends)
+            }
+
+            // 5. 48-Hour Inactivity Follow-Up Action Center
             item {
                 Card(
                     modifier = Modifier

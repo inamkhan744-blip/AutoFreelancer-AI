@@ -118,32 +118,44 @@ class ImapEmailService {
                 val body = extractBody(msg)
 
                 // ==========================================
-                // SMART FILTER: Bot/Alerts/Self ko ignore karein
+                // STRICT REAL CLIENT FILTER: Exclude User's Own Gmail & Bots
                 // ==========================================
                 val lowerSender = senderEmail.lowercase()
                 val lowerSubject = subject.lowercase()
                 val lowerMyEmail = cleanEmail.lowercase()
+                val myPrefix = lowerMyEmail.substringBefore("@").trim()
+                val senderPrefix = lowerSender.substringBefore("@").trim()
 
-                val isSelfSent = lowerSender == lowerMyEmail
+                val isSelfSent = lowerSender == lowerMyEmail ||
+                                  (myPrefix.isNotBlank() && (senderPrefix == myPrefix || lowerSender.contains(myPrefix))) ||
+                                  (cleanEmail.isNotBlank() && lowerSender.contains(cleanEmail.lowercase()))
+
                 val isAutomated = lowerSender.contains("alert") || 
                                   lowerSender.contains("noreply") || 
                                   lowerSender.contains("no-reply") ||
-                                  lowerSender.contains("info") || 
+                                  lowerSender.contains("info@") || 
                                   lowerSender.contains("uptimerobot") ||
                                   lowerSender.contains("notification") ||
                                   lowerSender.contains("newsletter") ||
                                   lowerSender.contains("mailer-daemon") ||
-                                  lowerSender.contains("support") ||
+                                  lowerSender.contains("postmaster") ||
+                                  lowerSender.contains("support@") ||
+                                  lowerSender.contains("accounts.google") ||
+                                  lowerSender.contains("google.com") ||
+                                  lowerSender.contains("security-noreply") ||
+                                  lowerSender.contains("bounce") ||
+                                  lowerSubject.contains("security alert") ||
+                                  lowerSubject.contains("verification code") ||
                                   lowerSubject.contains("monitor is up") || 
                                   lowerSubject.contains("monitor is down") ||
                                   lowerSubject.contains("uptime")
 
                 if (isSelfSent || isAutomated) {
-                    Log.d(tag, "Skipped automated/self email: $lowerSender - $lowerSubject")
+                    Log.d(tag, "Strict Filter: Skipped self/automated email from $lowerSender ($lowerSubject)")
                     if (markAsSeen) {
                         msg.setFlag(Flags.Flag.SEEN, true)
                     }
-                    continue // Agli email par jayen
+                    continue
                 }
                 // ==========================================
 

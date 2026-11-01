@@ -277,4 +277,124 @@ class AiCloserService(
             else -> "General Client Objection"
         }
     }
+
+    data class LeadPriorityScore(
+        val score: Int,
+        val summary: String,
+        val highIntentSignals: List<String> = emptyList(),
+        val providerUsed: String = "Heuristic ML"
+    )
+
+    /**
+     * Machine learning-based priority scoring system that analyzes incoming lead
+     * emails and assigns a 1-10 'Conversion Probability' score.
+     */
+    suspend fun scoreLeadConversionProbability(
+        emailBody: String,
+        subject: String,
+        geminiApiKey: String = "",
+        geminiModel: String = AiOrchestrationService.PRIMARY_GEMINI_MODEL
+    ): LeadPriorityScore = withContext(Dispatchers.IO) {
+        val lowerText = "$subject $emailBody".lowercase()
+        val detectedSignals = mutableListOf<String>()
+        var baseScore = 5
+
+        // Commercial / Budget Intent
+        if (lowerText.contains("budget") || lowerText.contains("quote") || lowerText.contains("pricing") ||
+            lowerText.contains("cost") || lowerText.contains("how much") || lowerText.contains("rates") ||
+            lowerText.contains("$") || lowerText.contains("proposal") || lowerText.contains("invoice") ||
+            lowerText.contains("package") || lowerText.contains("tier")) {
+            baseScore += 2
+            detectedSignals.add("Commercial/Budget Inquiry")
+        }
+
+        // Urgency / Timeline
+        if (lowerText.contains("asap") || lowerText.contains("urgent") || lowerText.contains("immediately") ||
+            lowerText.contains("this week") || lowerText.contains("start soon") || lowerText.contains("deadline") ||
+            lowerText.contains("ready now")) {
+            baseScore += 2
+            detectedSignals.add("High Timeline Urgency")
+        }
+
+        // Direct Call / Meeting
+        if (lowerText.contains("call") || lowerText.contains("schedule") || lowerText.contains("calendly") ||
+            lowerText.contains("zoom") || lowerText.contains("meet") || lowerText.contains("available at") ||
+            lowerText.contains("phone") || lowerText.contains("discuss")) {
+            baseScore += 2
+            detectedSignals.add("Meeting/Call Requested")
+        }
+
+        // Ready to close / Hiring intent
+        if (lowerText.contains("hire") || lowerText.contains("work together") || lowerText.contains("contract") ||
+            lowerText.contains("let's do it") || lowerText.contains("ready to start") || lowerText.contains("move forward") ||
+            lowerText.contains("sign up") || lowerText.contains("agreement")) {
+            baseScore += 2
+            detectedSignals.add("High Closing Intent")
+        }
+
+        // Negative / Rejection triggers
+        if (lowerText.contains("unsubscribe") || lowerText.contains("stop emailing") || lowerText.contains("not interested") ||
+            lowerText.contains("remove me") || lowerText.contains("spam") || lowerText.contains("wrong person") ||
+            lowerText.contains("do not contact")) {
+            baseScore = 1
+            detectedSignals.add("Opt-Out / Disinterest")
+        } else if (lowerText.contains("too expensive") || lowerText.contains("no budget") || lowerText.contains("can't afford")) {
+            baseScore -= 2
+            detectedSignals.add("Budget Friction")
+        }
+
+        val clampedScore = baseScore.coerceIn(1, 10)
+        val defaultSummary = when (clampedScore) {
+            in 8..10 -> "High intent: Prospect ready to discuss scope, pricing, or call."
+            in 6..7 -> "Moderate intent: Actively inquiring into services and timeline."
+            in 4..5 -> "Neutral / Inquiry: General discovery or preliminary objection."
+            else -> "Low probability: Budget constraint or opt-out signal."
+        }
+
+        if (geminiApiKey.isNotBlank()) {
+            try {
+                val prompt = """
+                    Analyze this prospective client email for sales closing probability:
+                    Subject: $subject
+                    Body: $emailBody
+
+                    Respond ONLY in JSON format:
+                    {"score": 9, "summary": "Brief 1-sentence explanation of buying intent and probability."}
+                """.trimIndent()
+
+                val geminiRes = aiService.generateContentWithFallback(
+                    geminiApiKey = geminiApiKey,
+                    openRouterApiKey = "",
+                    geminiModel = geminiModel,
+                    systemPrompt = "You are a sales machine learning conversion scoring model. Output valid JSON with integer score (1-10) and concise summary.",
+                    userPrompt = prompt,
+                    maxTokens = 150,
+                    temperature = 0.2
+                )
+                if (geminiRes.isSuccess) {
+                    val content = geminiRes.getOrThrow().content
+                    val jsonStart = content.indexOf('{')
+                    val jsonEnd = content.lastIndexOf('}')
+                    if (jsonStart != -1 && jsonEnd != -1) {
+                        val parsed = JSONObject(content.substring(jsonStart, jsonEnd + 1))
+                        val aiScore = parsed.optInt("score", clampedScore).coerceIn(1, 10)
+                        val aiSummary = parsed.optString("summary", defaultSummary)
+                        return@withContext LeadPriorityScore(
+                            score = aiScore,
+                            summary = aiSummary,
+                            highIntentSignals = detectedSignals,
+                            providerUsed = "Gemini ML ($geminiModel)"
+                        )
+                    }
+                }
+            } catch (ignored: Exception) {}
+        }
+
+        LeadPriorityScore(
+            score = clampedScore,
+            summary = defaultSummary,
+            highIntentSignals = detectedSignals,
+            providerUsed = "Heuristic ML"
+        )
+    }
 }

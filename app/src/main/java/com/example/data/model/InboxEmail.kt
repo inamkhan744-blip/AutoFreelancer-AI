@@ -18,7 +18,10 @@ data class InboxEmail(
     // AI Reasoning Mode fields
     val reasoningAnalysis: String = "",
     val reasoningStrategy: String = "",
-    val nextBestAction: String = ""
+    val nextBestAction: String = "",
+    // ML Priority Scoring (1-10 Conversion Probability)
+    val conversionProbability: Int = 5,
+    val intentSummary: String = ""
 ) {
     fun toMap(): Map<String, Any?> {
         return mapOf(
@@ -35,7 +38,9 @@ data class InboxEmail(
             "sentAt" to sentAt,
             "reasoningAnalysis" to reasoningAnalysis,
             "reasoningStrategy" to reasoningStrategy,
-            "nextBestAction" to nextBestAction
+            "nextBestAction" to nextBestAction,
+            "conversionProbability" to conversionProbability,
+            "intentSummary" to intentSummary
         )
     }
 
@@ -55,6 +60,8 @@ data class InboxEmail(
             put("reasoningAnalysis", reasoningAnalysis)
             put("reasoningStrategy", reasoningStrategy)
             put("nextBestAction", nextBestAction)
+            put("conversionProbability", conversionProbability)
+            put("intentSummary", intentSummary)
         }
     }
 
@@ -74,11 +81,18 @@ data class InboxEmail(
                 sentAt = if (json.has("sentAt")) json.optLong("sentAt") else null,
                 reasoningAnalysis = json.optString("reasoningAnalysis", ""),
                 reasoningStrategy = json.optString("reasoningStrategy", ""),
-                nextBestAction = json.optString("nextBestAction", "")
+                nextBestAction = json.optString("nextBestAction", ""),
+                conversionProbability = json.optInt("conversionProbability", 5).coerceIn(1, 10),
+                intentSummary = json.optString("intentSummary", "")
             )
         }
 
         fun fromMap(id: String, map: Map<String, Any>): InboxEmail {
+            val convProb = when (val p = map["conversionProbability"]) {
+                is Number -> p.toInt()
+                is String -> p.toIntOrNull() ?: 5
+                else -> 5
+            }
             return InboxEmail(
                 id = id,
                 senderName = map["senderName"] as? String ?: "Client",
@@ -93,7 +107,9 @@ data class InboxEmail(
                 sentAt = (map["sentAt"] as? Number)?.toLong(),
                 reasoningAnalysis = map["reasoningAnalysis"] as? String ?: "",
                 reasoningStrategy = map["reasoningStrategy"] as? String ?: "",
-                nextBestAction = map["nextBestAction"] as? String ?: ""
+                nextBestAction = map["nextBestAction"] as? String ?: "",
+                conversionProbability = convProb.coerceIn(1, 10),
+                intentSummary = map["intentSummary"] as? String ?: ""
             )
         }
     }

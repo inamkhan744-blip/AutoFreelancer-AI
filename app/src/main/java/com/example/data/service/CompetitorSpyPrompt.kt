@@ -6,7 +6,9 @@ object CompetitorSpyPrompt {
     private val websitePattern = Regex("(?:https?://)?(?:www\\.)?[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)+", RegexOption.IGNORE_CASE)
     private val excludedHosts = setOf(
         "linkedin.com", "reddit.com", "x.com", "twitter.com", "facebook.com", "instagram.com",
-        "youtube.com", "tiktok.com", "pinterest.com", "medium.com"
+        "youtube.com", "tiktok.com", "pinterest.com", "medium.com", "quora.com", "github.com",
+        "indiehackers.com", "substack.com", "wordpress.org", "wikipedia.org", "google.com",
+        "yahoo.com", "bing.com"
     )
 
     fun websiteFor(prospect: ProspectResult): String {

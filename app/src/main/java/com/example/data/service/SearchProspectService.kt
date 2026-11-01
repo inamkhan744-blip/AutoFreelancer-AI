@@ -196,10 +196,12 @@ class SearchProspectService(
         if (cleanUrl.isBlank()) return@withContext null
 
         val lowerUrl = cleanUrl.lowercase()
-        // Skip social media profile domains where deep scraping is restricted or non-functional
+        // Skip social media profile domains and SEO tool / agency websites
         if (lowerUrl.contains("linkedin.com") || lowerUrl.contains("reddit.com") ||
             lowerUrl.contains("twitter.com") || lowerUrl.contains("x.com") ||
-            lowerUrl.contains("facebook.com") || lowerUrl.contains("instagram.com")
+            lowerUrl.contains("facebook.com") || lowerUrl.contains("instagram.com") ||
+            lowerUrl.contains("youtube.com") || lowerUrl.contains("tiktok.com") ||
+            isAgency("", "", cleanUrl)
         ) {
             return@withContext null
         }
@@ -652,21 +654,67 @@ class SearchProspectService(
             "straightnorth.com", "coalitiontechnologies.com", "outerboxdesign.com",
             "directiveconsulting.com", "singleorigin.com", "neilpatel.com", "semrush.com",
             "ahrefs.com", "moz.com", "hubspot.com", "clutch.co", "upcity.com", "goodfirms.co",
-            "searchengineland.com", "searchenginejournal.com"
+            "searchengineland.com", "searchenginejournal.com", "searchenginewatch.com", "searchengineoracle.com",
+            // Known SEO Audit Tools, Scrapers & Checkers
+            "seoptimer.com", "woorank.com", "seositecheckup.com", "sitechecker.pro",
+            "mysiteauditor.com", "screamingfrog.co.uk", "spyfu.com", "serpstat.com",
+            "majestic.com", "surferseo.com", "mangools.com", "seobility.net",
+            "found.co.uk", "thehoth.com", "fatjoe.com", "stanventures.com",
+            "rankmath.com", "yoast.com", "backlinko.com", "wordstream.com",
+            "ubersuggest.com", "gtmetrix.com", "pagespeed.web.dev", "pingdom.com",
+            "dareboost.com", "varvy.com", "seotesteronline.com", "auditmysite.com",
+            "growthbarseo.com", "g2.com", "capterra.com", "trustpilot.com",
+            "seo.com", "linkgraph.com", "markitors.com", "brafton.com", "growthmachine.com",
+            "siege-media.com", "seoclarity.net", "brightedge.com", "conductor.com",
+            "sitebulb.com", "oncrawl.com", "botify.com", "localseoguide.com"
         )
 
         fun isAgency(title: String, snippet: String, link: String): Boolean {
             val lowerLink = link.lowercase()
             if (KNOWN_AGENCY_DOMAINS.any { lowerLink.contains(it) }) return true
 
+            // URL path indicating SEO audit tool, checker, agency service, or blog article
+            val agencyUrlKeywords = listOf(
+                "seo-audit-tool", "free-seo-audit", "free-website-audit", "seo-checker",
+                "website-checker", "seo-analysis-tool", "seo-agency", "seo-services",
+                "seo-company", "digital-agency", "marketing-agency", "seo-packages",
+                "best-seo-tools", "top-seo-tools", "best-seo-agencies", "how-to-do-an-seo-audit",
+                "seo-audit-guide"
+            )
+            if (agencyUrlKeywords.any { lowerLink.contains(it) }) return true
+
             val lowerText = "$title $snippet".lowercase()
+
+            // Phrases indicating an SEO tool, software, or audit generator
+            val toolPhrases = listOf(
+                "seo audit tool", "free seo audit", "free website review", "instant seo audit",
+                "run a free audit", "run a free website audit", "seo score checker", "website seo score",
+                "seo audit software", "best seo audit tools", "top seo audit tools", "free website analysis",
+                "free online seo audit", "seo report generator", "check your website score",
+                "test your website's seo", "comprehensive seo checker"
+            )
+            if (toolPhrases.any { lowerText.contains(it) }) return true
+
+            // Phrases indicating an agency or SEO vendor selling services
             val agencyPhrases = listOf(
                 "award-winning seo agency", "top seo agency", "leading seo company",
                 "seo agency", "digital marketing agency", "full-service digital agency",
                 "we are an agency", "our agency", "our digital marketing services",
-                "seo services company", "best seo company", "best seo agencies"
+                "seo services company", "best seo company", "best seo agencies",
+                "we offer seo services", "our seo services", "hire our seo experts",
+                "hire our agency", "seo packages starting at", "seo consulting company",
+                "premier seo firm", "leading digital agency"
             )
-            return agencyPhrases.any { lowerText.contains(it) }
+            if (agencyPhrases.any { lowerText.contains(it) }) return true
+
+            // Phrases indicating an educational guide or listicle (not a client)
+            val guidePhrases = listOf(
+                "how to do an seo audit", "step-by-step seo audit", "guide to performing an seo audit",
+                "10 best seo tools", "ultimate guide to seo", "complete seo checklist"
+            )
+            if (guidePhrases.any { lowerText.contains(it) }) return true
+
+            return false
         }
     }
 }

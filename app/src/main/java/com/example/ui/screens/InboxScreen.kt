@@ -121,18 +121,34 @@ fun InboxScreen(
 
     val inboxEmails by viewModel.inboxEmails.collectAsState()
     var statusFilter by remember { mutableStateOf("ALL") } // ALL, "Awaiting Review", "Approved & Sent", "Dismissed"
+    var priorityFilter by remember { mutableStateOf("ALL") } // ALL, "HIGH", "MODERATE", "LOW"
+    var sortByPriority by remember { mutableStateOf(false) }
     var showScenarioDropdown by remember { mutableStateOf(false) }
     var isSyncingImap by remember { mutableStateOf(false) }
 
     val awaitingCount = inboxEmails.count { it.status == "Awaiting Review" }
     val approvedCount = inboxEmails.count { it.status == "Approved & Sent" }
+    val highPriorityCount = inboxEmails.count { it.conversionProbability >= 8 }
 
-    val filteredEmails = remember(inboxEmails, statusFilter) {
-        when (statusFilter) {
+    val filteredEmails = remember(inboxEmails, statusFilter, priorityFilter, sortByPriority) {
+        var list = when (statusFilter) {
             "Awaiting Review" -> inboxEmails.filter { it.status == "Awaiting Review" }
             "Approved & Sent" -> inboxEmails.filter { it.status == "Approved & Sent" }
             "Dismissed" -> inboxEmails.filter { it.status == "Dismissed" }
             else -> inboxEmails
+        }
+
+        list = when (priorityFilter) {
+            "HIGH" -> list.filter { it.conversionProbability >= 8 }
+            "MODERATE" -> list.filter { it.conversionProbability in 5..7 }
+            "LOW" -> list.filter { it.conversionProbability in 1..4 }
+            else -> list
+        }
+
+        if (sortByPriority) {
+            list.sortedByDescending { it.conversionProbability }
+        } else {
+            list.sortedByDescending { it.receivedAt }
         }
     }
 
@@ -366,11 +382,31 @@ fun InboxScreen(
                     FilterChip(
                         selected = statusFilter == "Approved & Sent",
                         onClick = { statusFilter = "Approved & Sent" },
-                        label = { Text("Approved & Sent ($approvedCount)") },
+                        label = { Text("Approved ($approvedCount)") },
                         modifier = Modifier.testTag("inbox_filter_sent"),
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = CyberSuccess.copy(alpha = 0.2f),
                             selectedLabelColor = CyberSuccess
+                        )
+                    )
+                    FilterChip(
+                        selected = priorityFilter == "HIGH",
+                        onClick = { priorityFilter = if (priorityFilter == "HIGH") "ALL" else "HIGH" },
+                        label = { Text("🔥 High Intent ($highPriorityCount)") },
+                        modifier = Modifier.testTag("inbox_filter_high_priority"),
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = CyberSuccess.copy(alpha = 0.25f),
+                            selectedLabelColor = CyberSuccess
+                        )
+                    )
+                    FilterChip(
+                        selected = sortByPriority,
+                        onClick = { sortByPriority = !sortByPriority },
+                        label = { Text(if (sortByPriority) "Sorted by Priority (10→1) ✓" else "Sort: Highest Priority") },
+                        modifier = Modifier.testTag("inbox_sort_priority_toggle"),
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = CyberTertiary.copy(alpha = 0.25f),
+                            selectedLabelColor = CyberTertiary
                         )
                     )
                 }
@@ -541,30 +577,69 @@ private fun InboxEmailCard(
                 }
             }
 
-            // Objection Type Chip
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(CyberSecondary.copy(alpha = 0.12f))
-                    .border(1.dp, CyberSecondary.copy(alpha = 0.3f), RoundedCornerShape(6.dp))
-                    .padding(horizontal = 8.dp, vertical = 2.dp)
+            // Objection Type & ML Conversion Probability Badge Row
+            val prob = email.conversionProbability
+            val (probColor, probIcon, probText) = when {
+                prob >= 8 -> Triple(CyberSuccess, "🔥", "HIGH INTENT ($prob/10)")
+                prob in 5..7 -> Triple(CyberSecondary, "⚡", "MODERATE ($prob/10)")
+                else -> Triple(Color(0xFF90A4AE), "❄️", "LOW INTENT ($prob/10)")
+            }
+
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(probColor.copy(alpha = 0.15f))
+                        .border(1.dp, probColor.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
+                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                        .testTag("conversion_probability_badge")
                 ) {
-                    Icon(
-                        Icons.Default.Warning,
-                        contentDescription = null,
-                        modifier = Modifier.size(12.dp),
-                        tint = CyberSecondary
-                    )
                     Text(
-                        text = email.objectionCategory,
+                        text = "$probIcon $probText",
                         style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                        color = CyberSecondary
+                        color = probColor,
+                        fontSize = 10.sp
                     )
                 }
+
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(CyberSecondary.copy(alpha = 0.12f))
+                        .border(1.dp, CyberSecondary.copy(alpha = 0.3f), RoundedCornerShape(6.dp))
+                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Warning,
+                            contentDescription = null,
+                            modifier = Modifier.size(12.dp),
+                            tint = CyberSecondary
+                        )
+                        Text(
+                            text = email.objectionCategory,
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = CyberSecondary,
+                            fontSize = 10.sp
+                        )
+                    }
+                }
+            }
+
+            if (email.intentSummary.isNotBlank()) {
+                Text(
+                    text = "ML Intent: ${email.intentSummary}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 11.sp
+                )
             }
 
             // Inbound Client Email Box

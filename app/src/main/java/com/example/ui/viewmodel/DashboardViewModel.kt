@@ -29,6 +29,7 @@ import com.example.data.service.FollowUpSequenceEngine
 import com.example.data.service.GeneratedPitch
 import com.example.data.model.ClosureTrendPoint
 import com.example.data.model.ConversionAnalyticsSummary
+import com.example.data.model.MonthlyIncomeTrendPoint
 import com.example.data.model.PipelineFunnelStage
 import com.example.data.model.ResponseTimeDistribution
 import com.example.data.service.GeneratedTemplate
@@ -305,6 +306,66 @@ class DashboardViewModel(
                     winRate = periodWinRate
                 )
             )
+        }
+        points
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val monthlyIncomeTrends: StateFlow<List<MonthlyIncomeTrendPoint>> = clients.map { list ->
+        val monthFormat = java.text.SimpleDateFormat("MMM ''yy", java.util.Locale.US)
+        val keyFormat = java.text.SimpleDateFormat("yyyy-MM", java.util.Locale.US)
+        val points = mutableListOf<MonthlyIncomeTrendPoint>()
+
+        var prevRev = 0.0
+        for (i in 5 downTo 0) {
+            val cal = java.util.Calendar.getInstance().apply {
+                add(java.util.Calendar.MONTH, -i)
+                set(java.util.Calendar.DAY_OF_MONTH, 1)
+                set(java.util.Calendar.HOUR_OF_DAY, 0)
+                set(java.util.Calendar.MINUTE, 0)
+                set(java.util.Calendar.SECOND, 0)
+                set(java.util.Calendar.MILLISECOND, 0)
+            }
+            val startMs = cal.timeInMillis
+            val maxDay = cal.getActualMaximum(java.util.Calendar.DAY_OF_MONTH)
+            cal.set(java.util.Calendar.DAY_OF_MONTH, maxDay)
+            cal.set(java.util.Calendar.HOUR_OF_DAY, 23)
+            cal.set(java.util.Calendar.MINUTE, 59)
+            cal.set(java.util.Calendar.SECOND, 59)
+            cal.set(java.util.Calendar.MILLISECOND, 999)
+            val endMs = cal.timeInMillis
+
+            val monthLabel = monthFormat.format(java.util.Date(startMs))
+            val monthKey = keyFormat.format(java.util.Date(startMs))
+
+            val wonInMonth = list.filter {
+                val isWon = DealPipelineStage.normalize(it.pipelineStage) == DealPipelineStage.WON ||
+                    it.paymentStatus.equals("PAID", ignoreCase = true)
+                isWon && (it.updatedAt in startMs..endMs || it.createdAt in startMs..endMs)
+            }
+
+            val wonCount = wonInMonth.size
+            val revenue = wonInMonth.sumOf {
+                if (it.proposalPrice > 0.0) it.proposalPrice else it.estimatedValue
+            }
+
+            val growthRate = if (prevRev > 0.0) {
+                (((revenue - prevRev) / prevRev) * 100f).toFloat()
+            } else if (revenue > 0.0 && i < 5) {
+                100f
+            } else {
+                0f
+            }
+
+            points.add(
+                MonthlyIncomeTrendPoint(
+                    monthKey = monthKey,
+                    monthLabel = monthLabel,
+                    revenue = revenue,
+                    wonDealsCount = wonCount,
+                    growthRatePercent = growthRate
+                )
+            )
+            prevRev = revenue
         }
         points
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -1057,7 +1118,7 @@ class DashboardViewModel(
         viewModelScope.launch {
             val currentConfig = settings.value
 
-            // 1. Daily Targets & Quota Enforcement
+            // 1. Continuous 24/7 Autonomous Lead Scouting (No 5-lead artificial blockage)
             val calendar = java.util.Calendar.getInstance().apply {
                 set(java.util.Calendar.HOUR_OF_DAY, 0)
                 set(java.util.Calendar.MINUTE, 0)
@@ -1068,31 +1129,28 @@ class DashboardViewModel(
             val allExistingClients = clientRepository?.observeClients()?.first().orEmpty()
             val todayLeadsCount = allExistingClients.count { it.createdAt >= todayStart }
 
-            if (todayLeadsCount >= currentConfig.dailyLeadTarget) {
-                val quotaMessage = "Daily target achieved ($todayLeadsCount/${currentConfig.dailyLeadTarget} leads). Sleeping until tomorrow."
-                LiveWorkerLogStore.record("Apollo-Scout", "> $quotaMessage")
-                _discoveryProgress.value = LeadDiscoveryProgress(
-                    isRunning = false,
-                    stepMessage = quotaMessage,
-                    prospects = emptyList()
-                )
-                return@launch
-            }
+            LiveWorkerLogStore.record(
+                "Apollo-Scout",
+                "> 24/7 Autonomous Scout Active ($todayLeadsCount leads found today). Continuing round-the-clock discovery..."
+            )
 
-            // 2. Dynamic Search Queries (Seeking clients who need help, not agencies)
+            // 2. Dynamic Search Queries (Targeting real business clients, excluding SEO tools & agencies)
             val dynamicQueries = listOf(
-                "\"need SEO audit\" \"@gmail.com\"",
-                "site:reddit.com \"hiring SEO expert\" OR \"need SEO help\"",
-                "\"looking for SEO freelancer\" \"contact me\"",
-                "\"my website traffic dropped\" \"need help\"",
-                "\"need someone to do SEO\" site:linkedin.com"
+                "site:reddit.com/r/smallbusiness OR site:reddit.com/r/ecommerce (\"need someone to do SEO\" OR \"hiring SEO freelancer\" OR \"organic traffic dropped\") -agency -tool",
+                "site:reddit.com/r/shopify (\"store traffic dropped\" OR \"need SEO help\" OR \"hiring SEO specialist\") -agency -tool",
+                "site:reddit.com/r/forhire \"[hiring]\" (\"SEO\" OR \"website optimization\" OR \"search ranking\") -agency",
+                "site:linkedin.com/posts (\"looking for a freelance SEO\" OR \"need an SEO expert for our business\" OR \"hiring SEO freelancer\") (\"email\" OR \"contact me\") -agency -tool",
+                "\"Shopify store owner\" (\"looking for SEO\" OR \"need SEO help\" OR \"traffic dropped\") \"contact\" -agency -tool",
+                "\"founder\" (\"our website traffic dropped\" OR \"looking for freelance SEO\" OR \"need SEO help\") \"@gmail.com\" OR \"@yahoo.com\" -agency -tool -software",
+                "\"e-commerce brand\" (\"need SEO specialist\" OR \"looking for freelance SEO\") \"contact\" -agency -tool",
+                "\"looking for SEO freelancer\" \"for my business\" OR \"for our store\" \"@gmail.com\" -agency -tool"
             )
             val queryToRun = customQuery ?: dynamicQueries.random()
-            LiveWorkerLogStore.record("Apollo-Scout", "> Selected targeted query: $queryToRun")
+            LiveWorkerLogStore.record("Apollo-Scout", "> Selected targeted client query: $queryToRun")
 
             _discoveryProgress.value = LeadDiscoveryProgress(
                 isRunning = true,
-                stepMessage = "Querying Serper, Brave, and Google CSE for active prospects...",
+                stepMessage = "Querying live engines (Serper, Brave, Google CSE) for authentic client leads...",
                 error = null
             )
 
@@ -1114,11 +1172,21 @@ class DashboardViewModel(
             // 4. The Email Hunter: Deep scraping & validation
             val qualifiedProspects = mutableListOf<Pair<ProspectResult, String>>()
             for (prospect in searchResult.leads) {
-                // Pre-check: Skip SEO agencies (like SmartSites) to only hunt prospective clients
+                // Pre-check: Skip SEO tools, checkers, blogs, and marketing agencies
                 if (SearchProspectService.isAgency(prospect.title, prospect.snippet, prospect.link)) {
                     LiveWorkerLogStore.record(
                         "Apollo-Scout",
-                        "> [Agency Filter] Skipped agency: ${prospect.title.take(30)} (${prospect.link})"
+                        "> [Agency Filter] Skipped SEO vendor / tool: ${prospect.title.take(30)} (${prospect.link})"
+                    )
+                    continue
+                }
+
+                // Check extracted client website
+                val targetSite = CompetitorSpyPrompt.websiteFor(prospect)
+                if (targetSite.isNotBlank() && SearchProspectService.isAgency("", "", targetSite)) {
+                    LiveWorkerLogStore.record(
+                        "Apollo-Scout",
+                        "> [Agency Filter] Skipped SEO tool/agency domain: $targetSite"
                     )
                     continue
                 }
@@ -1129,15 +1197,27 @@ class DashboardViewModel(
 
                 // Step B: Deep Scraping website and contact pages
                 if (discoveredEmail.isNullOrBlank()) {
-                    val targetSite = CompetitorSpyPrompt.websiteFor(prospect).ifBlank { prospect.link }
-                    LiveWorkerLogStore.record("Apollo-Scout", "> [Email Hunter] Deep scraping contact pages on $targetSite...")
-                    discoveredEmail = searchService.extractEmailFromWebsite(targetSite)
+                    val siteToScrape = if (targetSite.isNotBlank()) targetSite else prospect.link
+                    if (!SearchProspectService.isAgency("", "", siteToScrape)) {
+                        LiveWorkerLogStore.record("Apollo-Scout", "> [Email Hunter] Deep scraping contact pages on $siteToScrape...")
+                        discoveredEmail = searchService.extractEmailFromWebsite(siteToScrape)
+                    }
                 }
 
                 if (discoveredEmail.isNullOrBlank()) {
                     LiveWorkerLogStore.record(
                         "Apollo-Scout",
                         "> [Email Hunter] No valid business email found for ${prospect.title.take(30)}. Skipping lead."
+                    )
+                    continue
+                }
+
+                // Extra safety: Ignore emails with agency domains
+                val emailDomain = discoveredEmail.substringAfter("@").lowercase()
+                if (SearchProspectService.KNOWN_AGENCY_DOMAINS.any { emailDomain.contains(it) }) {
+                    LiveWorkerLogStore.record(
+                        "Apollo-Scout",
+                        "> [Agency Filter] Skipped email associated with SEO vendor: $discoveredEmail"
                     )
                     continue
                 }
@@ -1171,8 +1251,7 @@ class DashboardViewModel(
             )
 
             val generatedPitches = mutableListOf<GeneratedPitch>()
-            val remainingQuota = (currentConfig.dailyLeadTarget - todayLeadsCount).coerceAtLeast(1)
-            val targetProspects = qualifiedProspects.take(remainingQuota.coerceAtMost(3))
+            val targetProspects = qualifiedProspects.take(4)
 
             for ((index, qualifiedProspect) in targetProspects.withIndex()) {
                 val (prospect, discoveredEmail) = qualifiedProspect
@@ -1915,6 +1994,12 @@ class DashboardViewModel(
             _isOperationLoading.value = false
             if (res.isSuccess) {
                 val result = res.getOrThrow()
+                val scoreResult = closerService.scoreLeadConversionProbability(
+                    emailBody = incomingMessage,
+                    subject = subject,
+                    geminiApiKey = config.geminiApiKey,
+                    geminiModel = config.geminiModel
+                )
                 val newEmail = InboxEmail(
                     senderName = senderName,
                     senderEmail = senderEmail,
@@ -1925,10 +2010,12 @@ class DashboardViewModel(
                     status = "Awaiting Review",
                     reasoningAnalysis = result.reasoningAnalysis,
                     reasoningStrategy = result.reasoningStrategy,
-                    nextBestAction = result.nextBestAction
+                    nextBestAction = result.nextBestAction,
+                    conversionProbability = scoreResult.score,
+                    intentSummary = scoreResult.summary
                 )
                 inboxRepository?.upsertMessage(newEmail)
-                onResult(true, newEmail, "Objection analyzed by Gemini (${result.objectionCategory})")
+                onResult(true, newEmail, "Objection analyzed by Gemini (${result.objectionCategory} • Intent: ${scoreResult.score}/10)")
             } else {
                 val err = res.exceptionOrNull()?.message ?: "AI Closer failed"
                 onResult(false, null, err)
@@ -2108,9 +2195,17 @@ class DashboardViewModel(
 
             val emails = result.getOrNull().orEmpty()
             LiveWorkerLogStore.record("IMAP Sync", "Fetched ${emails.size} new replies from inbox.")
+            val cleanImapEmail = config.imapEmail.trim().lowercase()
+            val imapPrefix = cleanImapEmail.substringBefore("@")
             var processedCount = 0
 
             for (email in emails) {
+                val lowerFrom = email.senderEmail.trim().lowercase()
+                if (lowerFrom == cleanImapEmail || (imapPrefix.isNotBlank() && lowerFrom.contains(imapPrefix))) {
+                    LiveWorkerLogStore.record("IMAP Sync", "Ignored self-sent email: $lowerFrom")
+                    continue
+                }
+
                 val draftResult = if (config.isAiConfigured) {
                     runCatching {
                         closerService.analyzeAndDraftReply(
@@ -2129,6 +2224,13 @@ class DashboardViewModel(
                     }.getOrNull()
                 } else null
 
+                val scoreResult = closerService.scoreLeadConversionProbability(
+                    emailBody = email.body,
+                    subject = email.subject,
+                    geminiApiKey = config.geminiApiKey,
+                    geminiModel = config.geminiModel
+                )
+
                 val inboxEmail = InboxEmail(
                     senderName = email.senderName,
                     senderEmail = email.senderEmail,
@@ -2139,6 +2241,8 @@ class DashboardViewModel(
                     reasoningAnalysis = draftResult?.reasoningAnalysis.orEmpty(),
                     reasoningStrategy = draftResult?.reasoningStrategy.orEmpty(),
                     nextBestAction = draftResult?.nextBestAction.orEmpty(),
+                    conversionProbability = scoreResult.score,
+                    intentSummary = scoreResult.summary,
                     receivedAt = email.receivedAt
                 )
                 inboxRepository?.upsertMessage(inboxEmail)
@@ -2247,6 +2351,117 @@ class DashboardViewModel(
                 onResult(true, "Imported ${restoredTasks.size} tasks and ${restoredClients.size} clients successfully!")
             } catch (e: Exception) {
                 onResult(false, "Failed to import data: ${e.message}")
+            }
+        }
+    }
+
+    // ==========================================
+    // ML Priority Scoring Methods
+    // ==========================================
+
+    fun rescoreInboxEmail(
+        email: InboxEmail,
+        onResult: ((InboxEmail) -> Unit)? = null
+    ) {
+        viewModelScope.launch {
+            val config = settings.value
+            val scoreResult = closerService.scoreLeadConversionProbability(
+                emailBody = email.incomingMessage,
+                subject = email.subject,
+                geminiApiKey = config.geminiApiKey,
+                geminiModel = config.geminiModel
+            )
+
+            val updated = email.copy(
+                conversionProbability = scoreResult.score,
+                intentSummary = scoreResult.summary,
+                updatedAt = System.currentTimeMillis()
+            )
+            inboxRepository?.upsertMessage(updated)
+            onResult?.invoke(updated)
+        }
+    }
+
+    fun rescoreAllInboxEmails(onComplete: ((Int) -> Unit)? = null) {
+        viewModelScope.launch {
+            val list = inboxEmails.value
+            var updatedCount = 0
+            val config = settings.value
+            for (email in list) {
+                val scoreResult = closerService.scoreLeadConversionProbability(
+                    emailBody = email.incomingMessage,
+                    subject = email.subject,
+                    geminiApiKey = config.geminiApiKey,
+                    geminiModel = config.geminiModel
+                )
+                val updated = email.copy(
+                    conversionProbability = scoreResult.score,
+                    intentSummary = scoreResult.summary,
+                    updatedAt = System.currentTimeMillis()
+                )
+                inboxRepository?.upsertMessage(updated)
+                updatedCount++
+            }
+            onComplete?.invoke(updatedCount)
+        }
+    }
+
+    // ==========================================
+    // Voice Memo Context for Leads
+    // ==========================================
+
+    private var activeAudioRecorder: com.example.util.AudioRecorderHelper? = null
+
+    fun getOrCreateAudioRecorder(context: Context): com.example.util.AudioRecorderHelper {
+        val recorder = activeAudioRecorder ?: com.example.util.AudioRecorderHelper(context.applicationContext)
+        activeAudioRecorder = recorder
+        return recorder
+    }
+
+    fun transcribeAndSaveVoiceMemo(
+        client: CrmClient,
+        audioFile: File,
+        onResult: (Boolean, String) -> Unit
+    ) {
+        viewModelScope.launch {
+            _isOperationLoading.value = true
+            try {
+                val config = settings.value
+                val transcribeRes = aiService.transcribeVoiceMemoWithGemini(
+                    audioFile = audioFile,
+                    geminiApiKey = config.geminiApiKey,
+                    geminiModel = config.geminiModel,
+                    clientContext = "${client.name} (${client.company.ifBlank { client.websiteUrl }})"
+                )
+                val noteText = transcribeRes.getOrNull() ?: "Spoken voice memo recorded (${audioFile.length() / 1024} KB)."
+
+                val timeStamp = SimpleDateFormat("MMM dd, yyyy • h:mm a", Locale.getDefault()).format(Date())
+                val memoHeader = "[🎙️ Voice Memo • $timeStamp]"
+                val newEnrichmentNotes = if (client.enrichmentNotes.isBlank()) {
+                    "$memoHeader\n$noteText"
+                } else {
+                    "${client.enrichmentNotes}\n\n$memoHeader\n$noteText"
+                }
+
+                val updatedClient = client.copy(
+                    enrichmentNotes = newEnrichmentNotes,
+                    updatedAt = System.currentTimeMillis()
+                )
+                clientRepository?.upsertClient(updatedClient)
+                offlineSyncRepository?.enqueueAction(
+                    OfflineAction(
+                        type = "CRM_UPDATE",
+                        entityId = updatedClient.id,
+                        payloadJson = updatedClient.toJson().toString()
+                    )
+                )
+
+                LiveWorkerLogStore.record("Voice Memo", "> Transcribed & attached voice memo to ${client.name}'s CRM notes.")
+                onResult(true, "Transcribed & attached voice memo to ${client.name}!")
+            } catch (e: Exception) {
+                onResult(false, e.message ?: "Failed to process voice memo")
+            } finally {
+                _isOperationLoading.value = false
             }
         }
     }

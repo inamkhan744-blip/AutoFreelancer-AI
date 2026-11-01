@@ -47,6 +47,14 @@ import androidx.compose.material.icons.filled.Payment
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Search
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Notes
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Sms
 import androidx.compose.material.icons.filled.TrendingUp
@@ -58,6 +66,9 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.core.content.ContextCompat
+import kotlinx.coroutines.delay
+import java.io.File
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -75,6 +86,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -127,6 +139,7 @@ fun ClientsCrmScreen(
     var selectedClientForProposal by remember { mutableStateOf<CrmClient?>(null) }
     var selectedClientForPayment by remember { mutableStateOf<CrmClient?>(null) }
     var selectedClientForTwilio by remember { mutableStateOf<CrmClient?>(null) }
+    var selectedClientForVoiceMemo by remember { mutableStateOf<CrmClient?>(null) }
 
     // Email dispatch state
     var emailSubject by remember { mutableStateOf("") }
@@ -413,6 +426,9 @@ fun ClientsCrmScreen(
                                     snackbarHostState.showSnackbar(msg)
                                 }
                             }
+                        },
+                        onVoiceMemoClicked = {
+                            selectedClientForVoiceMemo = client
                         },
                         onCopyContent = { text, label ->
                             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -787,6 +803,21 @@ fun ClientsCrmScreen(
             }
         )
     }
+
+    // Dialog: Record Spoken Voice Memo for Client
+    selectedClientForVoiceMemo?.let { client ->
+        VoiceMemoRecordDialog(
+            client = client,
+            viewModel = viewModel,
+            onDismiss = { selectedClientForVoiceMemo = null },
+            onCompleted = { success, msg ->
+                selectedClientForVoiceMemo = null
+                scope.launch {
+                    snackbarHostState.showSnackbar(msg)
+                }
+            }
+        )
+    }
 }
 
 @Composable
@@ -835,6 +866,7 @@ private fun ClientPipelineCard(
     onOpenPortalClicked: () -> Unit,
     onSendEmailClicked: () -> Unit,
     onTriggerSequence: (FollowUpSequenceEngine.FollowUpStage) -> Unit,
+    onVoiceMemoClicked: () -> Unit,
     onCopyContent: (String, String) -> Unit
 ) {
     var stageDropdownOpen by remember { mutableStateOf(false) }
@@ -1085,6 +1117,21 @@ private fun ClientPipelineCard(
                         Text("5-Point Audit", fontSize = 12.sp)
                     }
                 }
+
+                // Record Voice Memo Button
+                Button(
+                    onClick = onVoiceMemoClicked,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = CyberWarning.copy(alpha = 0.15f),
+                        contentColor = CyberWarning
+                    ),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.testTag("voice_memo_button_${client.id}")
+                ) {
+                    Icon(Icons.Default.Mic, contentDescription = "Record Voice Memo", modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Voice Memo", fontSize = 12.sp)
+                }
             }
 
             // Expandable Proposal Section
@@ -1218,6 +1265,317 @@ private fun ClientPipelineCard(
                     }
                 }
             }
+
+            // Expandable Notes & Spoken Voice Context Section
+            if (client.enrichmentNotes.isNotBlank()) {
+                var expandedNotes by remember { mutableStateOf(false) }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { expandedNotes = !expandedNotes }
+                        .padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(Icons.Default.Notes, contentDescription = null, modifier = Modifier.size(14.dp), tint = CyberWarning)
+                        Text(
+                            text = "Lead Context & Voice Notes",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                            color = CyberWarning
+                        )
+                    }
+                    Icon(
+                        imageVector = if (expandedNotes) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = null,
+                        tint = CyberWarning
+                    )
+                }
+
+                AnimatedVisibility(visible = expandedNotes) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Column(modifier = Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                text = client.enrichmentNotes,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                                TextButton(onClick = { onCopyContent(client.enrichmentNotes, "Voice Notes") }) {
+                                    Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Copy Notes")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
+}
+
+@Composable
+private fun VoiceMemoRecordDialog(
+    client: CrmClient,
+    viewModel: DashboardViewModel,
+    onDismiss: () -> Unit,
+    onCompleted: (Boolean, String) -> Unit
+) {
+    val context = LocalContext.current
+    val recorder = remember { viewModel.getOrCreateAudioRecorder(context) }
+
+    var hasMicPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        hasMicPermission = granted
+        if (!granted) {
+            Toast.makeText(context, "Microphone permission required to record voice memo", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    var isRecording by remember { mutableStateOf(false) }
+    var recordDurationSeconds by remember { mutableStateOf(0) }
+    var recordedFile by remember { mutableStateOf<File?>(null) }
+    var isTranscribing by remember { mutableStateOf(false) }
+
+    // Live recording timer
+    LaunchedEffect(isRecording) {
+        if (isRecording) {
+            recordDurationSeconds = 0
+            while (isRecording) {
+                delay(1000L)
+                recordDurationSeconds++
+            }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = {
+            if (isRecording) {
+                recorder.cancelRecording()
+            }
+            onDismiss()
+        },
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(Icons.Default.Mic, contentDescription = null, tint = CyberWarning)
+                Text("Voice Memo: ${client.name}")
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "Record spoken context or objections for ${client.company.ifBlank { client.name }}. Gemini AI will transcribe the audio and attach it to CRM context notes.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                if (!hasMicPermission) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = CyberWarning.copy(alpha = 0.15f))
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = "Microphone access is required to record audio notes.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Button(
+                                onClick = { permissionLauncher.launch(Manifest.permission.RECORD_AUDIO) },
+                                modifier = Modifier.testTag("grant_mic_permission_button")
+                            ) {
+                                Text("Grant Permission")
+                            }
+                        }
+                    }
+                } else {
+                    // Recording Status / Visualizer Card
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isRecording) CyberError.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        )
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            if (isRecording) {
+                                val minutes = recordDurationSeconds / 60
+                                val seconds = recordDurationSeconds % 60
+                                val timeFormatted = String.format(java.util.Locale.US, "%02d:%02d", minutes, seconds)
+
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        color = CyberError,
+                                        strokeWidth = 2.dp
+                                    )
+                                    Text(
+                                        text = "Recording... $timeFormatted",
+                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = CyberError
+                                    )
+                                }
+                                Text(
+                                    text = "Speak clearly into your microphone",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            } else if (recordedFile != null) {
+                                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = CyberSuccess, modifier = Modifier.size(32.dp))
+                                Text(
+                                    text = "Voice Memo Captured (${(recordedFile?.length() ?: 0L) / 1024} KB)",
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = CyberSuccess
+                                )
+                                Text(
+                                    text = "Ready to transcribe with Gemini and enrich CRM notes.",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            } else {
+                                Icon(Icons.Default.Mic, contentDescription = null, tint = CyberWarning, modifier = Modifier.size(36.dp))
+                                Text(
+                                    text = "Tap Start to Record Voice Note",
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                                )
+                            }
+                        }
+                    }
+
+                    // Recording Controls
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally)
+                    ) {
+                        if (!isRecording && recordedFile == null) {
+                            Button(
+                                onClick = {
+                                    val res = recorder.startRecording()
+                                    if (res.isSuccess) {
+                                        isRecording = true
+                                    } else {
+                                        Toast.makeText(context, "Failed to start recorder: ${res.exceptionOrNull()?.message}", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = CyberWarning),
+                                modifier = Modifier.testTag("start_voice_memo_recording")
+                            ) {
+                                Icon(Icons.Default.Mic, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Start Recording")
+                            }
+                        } else if (isRecording) {
+                            Button(
+                                onClick = {
+                                    val stopRes = recorder.stopRecording()
+                                    isRecording = false
+                                    recordedFile = stopRes.getOrNull()
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = CyberError),
+                                modifier = Modifier.testTag("stop_voice_memo_recording")
+                            ) {
+                                Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Stop Recording")
+                            }
+                        } else {
+                            // Recorded state: allow re-record
+                            OutlinedButton(
+                                onClick = {
+                                    recordedFile?.delete()
+                                    recordedFile = null
+                                    recordDurationSeconds = 0
+                                },
+                                modifier = Modifier.testTag("rerecord_voice_memo")
+                            ) {
+                                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Re-record")
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (recordedFile != null) {
+                Button(
+                    onClick = {
+                        val file = recordedFile ?: return@Button
+                        isTranscribing = true
+                        viewModel.transcribeAndSaveVoiceMemo(client, file) { success, msg ->
+                            isTranscribing = false
+                            onCompleted(success, msg)
+                        }
+                    },
+                    enabled = !isTranscribing,
+                    colors = ButtonDefaults.buttonColors(containerColor = CyberPrimary),
+                    modifier = Modifier.testTag("submit_voice_memo_transcription")
+                ) {
+                    if (isTranscribing) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Transcribing...")
+                    } else {
+                        Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Transcribe & Save to CRM")
+                    }
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = {
+                    if (isRecording) {
+                        recorder.cancelRecording()
+                    }
+                    recordedFile?.delete()
+                    onDismiss()
+                }
+            ) {
+                Text(if (recordedFile != null) "Discard" else "Cancel")
+            }
+        }
+    )
 }

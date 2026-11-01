@@ -33,3 +33,11 @@ data class ConversionAnalyticsSummary(
     val avgDealSize: Double = 0.0,
     val unresponsiveCount: Int = 0
 )
+
+data class MonthlyIncomeTrendPoint(
+    val monthKey: String,
+    val monthLabel: String,
+    val revenue: Double,
+    val wonDealsCount: Int,
+    val growthRatePercent: Float = 0f
+)

@@ -109,6 +109,7 @@ import androidx.core.content.ContextCompat
 import com.example.data.model.Task
 import com.example.data.service.GeneratedPitch
 import com.example.data.service.GeneratedVoiceNote
+import com.example.ui.components.MonthlyIncomeTrendsCard
 import com.example.ui.theme.CyberError
 import com.example.ui.theme.CyberPrimary
 import com.example.ui.theme.CyberPrimaryLight
@@ -147,6 +148,7 @@ fun DashboardScreen(
     val discoveryProgress by viewModel.discoveryProgress.collectAsState()
     val todayLeadCount by viewModel.todayLeadCount.collectAsState()
     val pipelineTotalValue by viewModel.pipelineTotalValue.collectAsState()
+    val monthlyIncomeTrends by viewModel.monthlyIncomeTrends.collectAsState()
     val settings by viewModel.settings.collectAsState()
 
     val userName = "Freelancer Director"
@@ -514,32 +516,99 @@ fun DashboardScreen(
                         }
                     }
                 } else {
-                    Column(
+                    LazyColumn(
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                            .padding(horizontal = 16.dp, vertical = 4.dp)
+                            .testTag("dashboard_scroll_list"),
+                        contentPadding = PaddingValues(bottom = 120.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        MetricsHeader(metrics = metrics)
-                        Spacer(modifier = Modifier.height(12.dp))
-                        SearchAndFilterBar(
-                            searchQuery = searchQuery,
-                            onSearchQueryChanged = { viewModel.onSearchQueryChanged(it) },
-                            statusFilter = statusFilter,
-                            onFilterChanged = { viewModel.onStatusFilterChanged(it) }
-                        )
-
-                        Spacer(modifier = Modifier.height(12.dp))
-                        TaskListContent(
-                            tasksState = tasksState,
-                            selectedTaskId = selectedTask?.id,
-                            onTaskClicked = { viewModel.selectTaskForDetail(it) },
-                            onApprove = { viewModel.approveTask(it) },
-                            onReject = { viewModel.openRejectDialog(it) },
-                            onComplete = { viewModel.completeTask(it.id) },
-                            onScoutClicked = { viewModel.runLeadDiscovery() },
-                            onSettingsClicked = onNavigateToSettings
-                        )
+                        item {
+                            MetricsHeader(metrics = metrics)
+                        }
+                        item {
+                            MonthlyIncomeTrendsCard(monthlyPoints = monthlyIncomeTrends)
+                        }
+                        item {
+                            SearchAndFilterBar(
+                                searchQuery = searchQuery,
+                                onSearchQueryChanged = { viewModel.onSearchQueryChanged(it) },
+                                statusFilter = statusFilter,
+                                onFilterChanged = { viewModel.onStatusFilterChanged(it) }
+                            )
+                        }
+                        when (val state = tasksState) {
+                            is TasksUiState.Loading -> {
+                                item {
+                                    Box(
+                                        modifier = Modifier.fillMaxWidth().padding(32.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        CircularProgressIndicator(color = CyberPrimary)
+                                    }
+                                }
+                            }
+                            is TasksUiState.Error -> {
+                                item {
+                                    Card(
+                                        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                                        colors = CardDefaults.cardColors(containerColor = CyberError.copy(alpha = 0.1f))
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.padding(16.dp),
+                                            horizontalAlignment = Alignment.CenterHorizontally
+                                        ) {
+                                            Text(text = "Unable to load tasks", style = MaterialTheme.typography.titleMedium, color = CyberError)
+                                            Text(text = state.message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
+                                    }
+                                }
+                            }
+                            is TasksUiState.Success -> {
+                                if (state.tasks.isEmpty()) {
+                                    item {
+                                        Card(
+                                            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
+                                            shape = RoundedCornerShape(12.dp)
+                                        ) {
+                                            Column(
+                                                modifier = Modifier.padding(20.dp).fillMaxWidth(),
+                                                horizontalAlignment = Alignment.CenterHorizontally
+                                            ) {
+                                                Icon(Icons.Default.Work, contentDescription = null, tint = CyberPrimaryLight, modifier = Modifier.size(36.dp))
+                                                Spacer(modifier = Modifier.height(10.dp))
+                                                Text("No tasks currently in pipeline", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold))
+                                                Spacer(modifier = Modifier.height(6.dp))
+                                                Text("Run 24/7 Lead Scout above to find verified clients.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                Spacer(modifier = Modifier.height(14.dp))
+                                                Button(
+                                                    onClick = { viewModel.runLeadDiscovery() },
+                                                    colors = ButtonDefaults.buttonColors(containerColor = CyberPrimary)
+                                                ) {
+                                                    Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                    Text("Run 24/7 Lead Hunter")
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    items(state.tasks, key = { it.id }) { task ->
+                                        TaskItemCard(
+                                            task = task,
+                                            isSelected = task.id == selectedTask?.id,
+                                            onClick = { viewModel.selectTaskForDetail(task) },
+                                            onApprove = { viewModel.approveTask(task) },
+                                            onReject = { viewModel.openRejectDialog(task) },
+                                            onComplete = { viewModel.completeTask(task.id) }
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -774,54 +843,84 @@ private fun LiveTerminalPanel(entries: List<WorkerLogEntry>) {
         scrollState.animateScrollTo(scrollState.maxValue)
     }
 
+    var isExpanded by remember { mutableStateOf(false) }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp)
-            .height(148.dp)
+            .padding(horizontal = 16.dp, vertical = 4.dp)
             .testTag("live_worker_terminal"),
         shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.cardColors(containerColor = Color(0xFF050907)),
         border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF00D65A).copy(alpha = 0.6f))
     ) {
-        Column(modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
+        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { isExpanded = !isExpanded },
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "LIVE WORKER TERMINAL",
-                    style = MaterialTheme.typography.labelMedium.copy(
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold
-                    ),
-                    color = Color(0xFF00F56A)
-                )
-                Text(
-                    text = "● LIVE",
-                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
-                    color = Color(0xFF55FF91)
-                )
-            }
-            Spacer(modifier = Modifier.height(5.dp))
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .verticalScroll(scrollState),
-                verticalArrangement = Arrangement.spacedBy(3.dp)
-            ) {
-                entries.takeLast(8).forEach { entry ->
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
-                        text = "> [${entry.worker}] ${entry.message}",
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        text = "LIVE WORKER TERMINAL",
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold
                         ),
-                        color = Color(0xFF9BFFB8),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        color = Color(0xFF00F56A)
                     )
+                    Text(
+                        text = "(${entries.size})",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xFF55FF91),
+                        fontSize = 10.sp
+                    )
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = "● LIVE",
+                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
+                        color = Color(0xFF55FF91)
+                    )
+                    Icon(
+                        imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = "Toggle Terminal Logs",
+                        tint = Color(0xFF00F56A),
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+
+            if (isExpanded) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(110.dp)
+                        .verticalScroll(scrollState),
+                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
+                    if (entries.isEmpty()) {
+                        Text(
+                            text = "> Ready. Autonomous AI workers waiting for tasks...",
+                            style = MaterialTheme.typography.bodySmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
+                            color = Color(0xFF9BFFB8).copy(alpha = 0.7f)
+                        )
+                    } else {
+                        entries.takeLast(10).forEach { entry ->
+                            Text(
+                                text = "> [${entry.worker}] ${entry.message}",
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                                ),
+                                color = Color(0xFF9BFFB8),
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
                 }
             }
         }
