@@ -115,6 +115,7 @@ import com.example.data.model.InboxEmail
 import com.example.data.model.Task
 import com.example.data.service.PaidDealEngine
 import com.example.data.service.ServiceTier
+import com.example.data.service.RevenueHeistDossier
 import com.example.data.service.GeneratedPitch
 import com.example.data.service.GeneratedVoiceNote
 import com.example.ui.components.MonthlyIncomeTrendsCard
@@ -165,10 +166,14 @@ fun DashboardScreen(
     val hotLeads by viewModel.hotLeads.collectAsState()
     val hotLeadsCount by viewModel.hotLeadsCount.collectAsState()
 
+    val activeHeistDossier by viewModel.activeHeistDossier.collectAsState()
+    val isHeistAnalyzing by viewModel.isHeistAnalyzing.collectAsState()
+
     var showDealCloserDialog by remember { mutableStateOf(false) }
     var selectedClientForOffer by remember { mutableStateOf<CrmClient?>(null) }
     var showRecordPaymentDialog by remember { mutableStateOf(false) }
     var selectedClientForPayment by remember { mutableStateOf<CrmClient?>(null) }
+    var showHeistInputModal by remember { mutableStateOf(false) }
 
     val userName = "Freelancer Director"
 
@@ -511,6 +516,11 @@ fun DashboardScreen(
                                     showRecordPaymentDialog = true
                                 }
                             )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            QuantumRevenueArbitrageCard(
+                                isAnalyzing = isHeistAnalyzing,
+                                onOpenHeistModal = { showHeistInputModal = true }
+                            )
                             Spacer(modifier = Modifier.height(12.dp))
                             SearchAndFilterBar(
                                 searchQuery = searchQuery,
@@ -538,6 +548,10 @@ fun DashboardScreen(
                                             )
                                         selectedClientForOffer = match
                                         showDealCloserDialog = true
+                                    },
+                                    onRunHeist = { email ->
+                                        val domain = email.senderEmail.substringAfter("@").takeIf { it.contains(".") } ?: "client-domain.com"
+                                        viewModel.runQuantumRevenueHeist(domain, email.senderName.ifBlank { "Client CEO" })
                                     }
                                 )
                             } else {
@@ -600,6 +614,12 @@ fun DashboardScreen(
                             )
                         }
                         item {
+                            QuantumRevenueArbitrageCard(
+                                isAnalyzing = isHeistAnalyzing,
+                                onOpenHeistModal = { showHeistInputModal = true }
+                            )
+                        }
+                        item {
                             MonthlyIncomeTrendsCard(monthlyPoints = monthlyIncomeTrends)
                         }
                         item {
@@ -630,6 +650,10 @@ fun DashboardScreen(
                                             )
                                         selectedClientForOffer = match
                                         showDealCloserDialog = true
+                                    },
+                                    onRunHeist = { email ->
+                                        val domain = email.senderEmail.substringAfter("@").takeIf { it.contains(".") } ?: "client-domain.com"
+                                        viewModel.runQuantumRevenueHeist(domain, email.senderName.ifBlank { "Client CEO" })
                                     }
                                 )
                             }
@@ -960,6 +984,38 @@ fun DashboardScreen(
                 viewModel.recordCashPaymentCollected(client, amount, method) { success, msg ->
                     Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
                 }
+            }
+        )
+    }
+
+    if (showHeistInputModal) {
+        QuantumHeistInputModal(
+            onDismiss = { showHeistInputModal = false },
+            onAnalyze = { domain, clientName ->
+                showHeistInputModal = false
+                viewModel.runQuantumRevenueHeist(domain, clientName)
+            }
+        )
+    }
+
+    activeHeistDossier?.let { dossier ->
+        QuantumHeistDossierDialog(
+            dossier = dossier,
+            onDismiss = { viewModel.dismissHeistDossier() },
+            onDispatchHeistOffer = {
+                val client = clients.find { it.company.equals(dossier.prospectUrl, ignoreCase = true) }
+                    ?: CrmClient(
+                        name = dossier.prospectName,
+                        company = dossier.prospectUrl,
+                        email = "ceo@${dossier.prospectUrl}",
+                        pipelineStage = DealPipelineStage.PROPOSAL_SENT,
+                        proposalPrice = dossier.recommendedOfferUsd
+                    )
+                val tier = PaidDealEngine.TIERS.find { it.priceUsd == 797.0 } ?: PaidDealEngine.TIERS[1]
+                viewModel.sendInstantPaidOffer(client, tier, dossier.highConvertingEmailPitch) { success, msg ->
+                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                }
+                viewModel.dismissHeistDossier()
             }
         )
     }
@@ -2959,6 +3015,7 @@ fun HotLeadsDashboardView(
     onConvertToTask: (InboxEmail) -> Unit,
     onViewInInbox: () -> Unit,
     onSendPaidOffer: ((InboxEmail) -> Unit)? = null,
+    onRunHeist: ((InboxEmail) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -3115,7 +3172,8 @@ fun HotLeadsDashboardView(
                     email = email,
                     onConvertToTask = { onConvertToTask(email) },
                     onViewInInbox = onViewInInbox,
-                    onSendPaidOffer = onSendPaidOffer?.let { callback -> { callback(email) } }
+                    onSendPaidOffer = onSendPaidOffer?.let { callback -> { callback(email) } },
+                    onRunHeist = onRunHeist?.let { callback -> { callback(email) } }
                 )
             }
         }
@@ -3128,7 +3186,8 @@ fun HotLeadItemCard(
     email: InboxEmail,
     onConvertToTask: () -> Unit,
     onViewInInbox: () -> Unit,
-    onSendPaidOffer: (() -> Unit)? = null
+    onSendPaidOffer: (() -> Unit)? = null,
+    onRunHeist: (() -> Unit)? = null
 ) {
     Card(
         modifier = Modifier
@@ -3270,30 +3329,43 @@ fun HotLeadItemCard(
                     Button(
                         onClick = onSendPaidOffer,
                         modifier = Modifier
-                            .weight(1.3f)
+                            .weight(1.2f)
                             .testTag("hot_lead_send_offer_button_${email.id}"),
                         colors = ButtonDefaults.buttonColors(containerColor = CyberTertiary),
                         shape = RoundedCornerShape(8.dp)
                     ) {
-                        Text("💰 Send $797 Offer", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 11.sp, maxLines = 1)
+                        Text("💰 $797 Offer", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 11.sp, maxLines = 1)
+                    }
+                }
+
+                if (onRunHeist != null) {
+                    Button(
+                        onClick = onRunHeist,
+                        modifier = Modifier
+                            .weight(1.0f)
+                            .testTag("hot_lead_heist_button_${email.id}"),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C3AED)),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("⚡ Heist", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp, maxLines = 1)
                     }
                 }
 
                 Button(
                     onClick = onConvertToTask,
                     modifier = Modifier
-                        .weight(1.1f)
+                        .weight(1.0f)
                         .testTag("hot_lead_convert_button_${email.id}"),
                     colors = ButtonDefaults.buttonColors(containerColor = CyberPrimary),
                     shape = RoundedCornerShape(8.dp)
                 ) {
-                    Text("To Deal Task", fontSize = 11.sp, maxLines = 1)
+                    Text("To Deal", fontSize = 11.sp, maxLines = 1)
                 }
 
                 OutlinedButton(
                     onClick = onViewInInbox,
                     modifier = Modifier
-                        .weight(0.9f)
+                        .weight(0.8f)
                         .testTag("hot_lead_inbox_button_${email.id}"),
                     shape = RoundedCornerShape(8.dp)
                 ) {
@@ -3745,6 +3817,452 @@ fun RecordPaymentDialog(
         dismissButton = {
             TextButton(onClick = onDismiss) {
                 Text("Cancel")
+            }
+        }
+    )
+}
+
+@Composable
+fun QuantumRevenueArbitrageCard(
+    isAnalyzing: Boolean,
+    onOpenHeistModal: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("quantum_revenue_arbitrage_card"),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFF0F0B1E)
+        ),
+        border = androidx.compose.foundation.BorderStroke(
+            1.5.dp,
+            Brush.horizontalGradient(listOf(Color(0xFFA855F7), Color(0xFF06B6D4), Color(0xFF3B82F6)))
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Brush.linearGradient(listOf(Color(0xFF7C3AED), Color(0xFF2563EB)))),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("⚡", fontSize = 20.sp)
+                    }
+                    Column {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                text = "QUANTUM REVENUE ARBITRAGE",
+                                style = MaterialTheme.typography.titleMedium.copy(
+                                    fontWeight = FontWeight.ExtraBold,
+                                    letterSpacing = 0.5.sp
+                                ),
+                                color = Color(0xFFF3E8FF)
+                            )
+                        }
+                        Text(
+                            text = "Autonomous Competitor Bleed Calculator & AI Closer",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFFC084FC)
+                        )
+                    }
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = Color(0xFF9333EA).copy(alpha = 0.25f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFA855F7))
+                ) {
+                    Text(
+                        text = "3.8x Close Rate",
+                        color = Color(0xFFE9D5FF),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Text(
+                text = "Traditional freelancers pitch 'SEO services' and get ignored. The Quantum Engine reverses this by calculating the exact cash bleeding daily (-\$340/day) to the prospect's top SERP competitor, rendering your \$797 recovery fee an instant positive ROI.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                lineHeight = 18.sp
+            )
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Surface(
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(10.dp),
+                    color = Color(0xFF1E1538),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF581C87).copy(alpha = 0.6f))
+                ) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Text("DAILY BLEED", fontSize = 10.sp, color = Color(0xFFA855F7), fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text("-$120 to -$480/day", fontSize = 12.sp, color = Color(0xFFF87171), fontWeight = FontWeight.ExtraBold)
+                        Text("Calculated live", fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+
+                Surface(
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(10.dp),
+                    color = Color(0xFF1E1538),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF581C87).copy(alpha = 0.6f))
+                ) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Text("PSYCH ARCHETYPE", fontSize = 10.sp, color = Color(0xFFA855F7), fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text("CFO vs Founder", fontSize = 12.sp, color = Color(0xFF67E8F9), fontWeight = FontWeight.ExtraBold)
+                        Text("Predicts resistance", fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+
+                Surface(
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(10.dp),
+                    color = Color(0xFF1E1538),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF581C87).copy(alpha = 0.6f))
+                ) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Text("CLOSER HOOK", fontSize = 10.sp, color = Color(0xFFA855F7), fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text("3-Sentence WA", fontSize = 12.sp, color = Color(0xFF4ADE80), fontWeight = FontWeight.ExtraBold)
+                        Text("Instant response", fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            Button(
+                onClick = onOpenHeistModal,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("launch_quantum_heist_button"),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF7C3AED)
+                ),
+                shape = RoundedCornerShape(12.dp),
+                enabled = !isAnalyzing
+            ) {
+                if (isAnalyzing) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Quantum Engine Analyzing SERP & Dollar Bleed...", fontSize = 13.sp, color = Color.White)
+                } else {
+                    Icon(Icons.Default.RocketLaunch, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Launch Competitor Traffic Bleed Heist", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color.White)
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun QuantumHeistInputModal(
+    onDismiss: () -> Unit,
+    onAnalyze: (String, String) -> Unit
+) {
+    var domainInput by remember { mutableStateOf("luminaskincare.com") }
+    var clientNameInput by remember { mutableStateOf("Alex Morgan, Founder") }
+
+    val presetDomains = listOf("shopglow.co", "luminaskincare.com", "apexfitwear.com", "nordicliving.store", "techflow.io")
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("⚡", fontSize = 24.sp)
+                Column {
+                    Text("Quantum Competitor Heist", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                    Text("Target Prospect Acquisition", fontSize = 12.sp, color = Color(0xFFA855F7))
+                }
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "Input any prospective client or e-commerce store. The Quantum Engine will calculate live dollar bleed to their competitors, formulate the psychological closing archetype, and draft the $797 contract.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                OutlinedTextField(
+                    value = domainInput,
+                    onValueChange = { domainInput = it },
+                    label = { Text("Client Domain / Website") },
+                    placeholder = { Text("e.g. brandstore.com") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("heist_domain_input"),
+                    shape = RoundedCornerShape(8.dp)
+                )
+
+                Text("Quick Target Presets:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    presetDomains.forEach { d ->
+                        FilterChip(
+                            selected = domainInput == d,
+                            onClick = { domainInput = d },
+                            label = { Text(d, fontSize = 11.sp) }
+                        )
+                    }
+                }
+
+                OutlinedTextField(
+                    value = clientNameInput,
+                    onValueChange = { clientNameInput = it },
+                    label = { Text("Executive / Decision-Maker Name") },
+                    placeholder = { Text("e.g. Sarah Chen, CEO") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("heist_client_name_input"),
+                    shape = RoundedCornerShape(8.dp)
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (domainInput.isNotBlank()) {
+                        onAnalyze(domainInput.trim(), clientNameInput.trim().ifBlank { "Founder / CEO" })
+                    }
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C3AED)),
+                modifier = Modifier.testTag("btn_execute_heist_analysis")
+            ) {
+                Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Calculate Bleed & Weaponize Dossier", color = Color.White, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun QuantumHeistDossierDialog(
+    dossier: RevenueHeistDossier,
+    onDismiss: () -> Unit,
+    onDispatchHeistOffer: () -> Unit
+) {
+    val context = LocalContext.current
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("⚡", fontSize = 24.sp)
+                    Column {
+                        Text("HEIST DOSSIER", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        Text(dossier.prospectUrl, fontSize = 12.sp, color = Color(0xFF38BDF8), fontWeight = FontWeight.SemiBold)
+                    }
+                }
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = Color(0xFFDC2626).copy(alpha = 0.2f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFEF4444))
+                ) {
+                    Text(
+                        text = "-$${dossier.dailyRevenueBleedUsd.toInt()}/day",
+                        color = Color(0xFFFCA5A5),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Bleed Metric Box
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E0E14)),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFDC2626).copy(alpha = 0.7f))
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Text("CALCULATED REVENUE BLEED", fontSize = 10.sp, color = Color(0xFFFCA5A5), fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                text = "-$${dossier.dailyRevenueBleedUsd.toInt()}",
+                                style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.ExtraBold),
+                                color = Color(0xFFEF4444)
+                            )
+                            Text(
+                                text = "/ day bleeding to competitor",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFFFCA5A5),
+                                modifier = Modifier.padding(bottom = 4.dp)
+                            )
+                        }
+                        Text(
+                            text = "Estimated Monthly Loss: -$${dossier.monthlyRevenueBleedUsd.toInt()}/mo • Stolen Visitors: ~${dossier.monthlyLostTraffic} buyers/mo (${dossier.competitorUrl})",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+
+                // Archetype Box
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = Color(0xFF131B2E),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF2563EB).copy(alpha = 0.5f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text("🧠", fontSize = 14.sp)
+                            Text("PSYCHOLOGICAL ARCHETYPE:", fontSize = 10.sp, color = Color(0xFF60A5FA), fontWeight = FontWeight.Bold)
+                            Text(dossier.clientArchetype, fontSize = 11.sp, color = Color(0xFF93C5FD), fontWeight = FontWeight.Bold)
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = dossier.archetypeDescription,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+
+                // Technical Leaks
+                Text("Identified Bleed Inefficiencies:", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                for (leak in dossier.technicalLeaks) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                        border = androidx.compose.foundation.BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("⚠️", fontSize = 14.sp)
+                            Text(leak, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+                        }
+                    }
+                }
+
+                // WhatsApp Hook
+                Text("High-Converting 3-Sentence WhatsApp Hook:", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = Color(0xFF062817),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.5f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            text = dossier.whatsappShortPitch,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFFD1FAE5),
+                            lineHeight = 18.sp
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(
+                            onClick = {
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                val clip = ClipData.newPlainText("WhatsApp Hook", dossier.whatsappShortPitch)
+                                clipboard.setPrimaryClip(clip)
+                                Toast.makeText(context, "Copied WhatsApp Hook to clipboard!", Toast.LENGTH_SHORT).show()
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF059669)),
+                            shape = RoundedCornerShape(6.dp),
+                            modifier = Modifier.align(Alignment.End)
+                        ) {
+                            Text("Copy Hook", fontSize = 11.sp, color = Color.White)
+                        }
+                    }
+                }
+
+                // Mathematical Proposal Draft
+                Text("Full Mathematical Heist Proposal ($${dossier.recommendedOfferUsd.toInt()} Retainer):", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = dossier.highConvertingEmailPitch,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(10.dp)
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onDispatchHeistOffer,
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C3AED)),
+                modifier = Modifier.testTag("btn_dispatch_heist_contract")
+            ) {
+                Icon(Icons.Default.Send, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Dispatch \$${dossier.recommendedOfferUsd.toInt()} Contract", color = Color.White, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(
+                    onClick = {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        val clip = ClipData.newPlainText("Heist Dossier", "${dossier.whatsappShortPitch}\n\n${dossier.highConvertingEmailPitch}")
+                        clipboard.setPrimaryClip(clip)
+                        Toast.makeText(context, "Copied complete dossier to clipboard!", Toast.LENGTH_SHORT).show()
+                    }
+                ) {
+                    Text("Copy Dossier")
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("Dismiss")
+                }
             }
         }
     )

@@ -39,6 +39,8 @@ import com.example.data.service.SearchProspectService
 import com.example.data.service.SeoAuditService
 import com.example.data.service.PaidDealEngine
 import com.example.data.service.ServiceTier
+import com.example.data.service.QuantumRevenueArbitrageEngine
+import com.example.data.service.RevenueHeistDossier
 import com.example.data.service.SeoReportResult
 import com.example.data.service.ImapEmailService
 import com.example.data.service.ReportGeneratorService
@@ -115,7 +117,8 @@ class DashboardViewModel(
     private val offlineSyncRepository: OfflineSyncQueueRepository? = null,
     private val abTestingEngine: AbTestingEngine? = null,
     private val imapService: ImapEmailService = ImapEmailService(),
-    private val reportGeneratorService: ReportGeneratorService = ReportGeneratorService()
+    private val reportGeneratorService: ReportGeneratorService = ReportGeneratorService(),
+    private val revenueArbitrageEngine: QuantumRevenueArbitrageEngine = QuantumRevenueArbitrageEngine(aiService)
 ) : ViewModel() {
 
     val liveTerminalEntries = LiveWorkerLogStore.entries
@@ -179,6 +182,53 @@ class DashboardViewModel(
 
     fun dismissDiscoveryProgress() {
         _discoveryProgress.value = LeadDiscoveryProgress(isRunning = false)
+    }
+
+    private val _activeHeistDossier = MutableStateFlow<RevenueHeistDossier?>(null)
+    val activeHeistDossier: StateFlow<RevenueHeistDossier?> = _activeHeistDossier.asStateFlow()
+
+    private val _isHeistAnalyzing = MutableStateFlow(false)
+    val isHeistAnalyzing: StateFlow<Boolean> = _isHeistAnalyzing.asStateFlow()
+
+    fun dismissHeistDossier() {
+        _activeHeistDossier.value = null
+    }
+
+    fun runQuantumRevenueHeist(
+        prospectUrl: String,
+        prospectName: String,
+        onResult: ((RevenueHeistDossier) -> Unit)? = null
+    ) {
+        val config = settings.value
+        viewModelScope.launch {
+            _isHeistAnalyzing.value = true
+            LiveWorkerLogStore.record(
+                "Revenue Heist",
+                "⚡ [QUANTUM HEIST INITIATED] Mapping competitor traffic siphons for $prospectUrl..."
+            )
+            try {
+                val dossier = revenueArbitrageEngine.analyzeAndGenerateDossier(
+                    prospectUrl = prospectUrl,
+                    prospectName = prospectName,
+                    agencyName = config.agencyName,
+                    paymentLinkUrl = config.paymentLinkUrl,
+                    geminiApiKey = config.geminiApiKey,
+                    openRouterApiKey = config.openRouterApiKey,
+                    geminiModel = config.geminiModel,
+                    openRouterModel = config.openRouterModel
+                )
+                _activeHeistDossier.value = dossier
+                LiveWorkerLogStore.record(
+                    "Revenue Heist",
+                    "⚡ [DOLLAR HEIST COMPLETE] $prospectUrl bleeds $${dossier.dailyRevenueBleedUsd.toInt()}/day ($${dossier.monthlyRevenueBleedUsd.toInt()}/mo) to ${dossier.competitorUrl}! Generated $${dossier.recommendedOfferUsd.toInt()} closing proposal."
+                )
+                onResult?.invoke(dossier)
+            } catch (e: Exception) {
+                LiveWorkerLogStore.record("Revenue Heist", "⚠️ Heist error: ${e.message}")
+            } finally {
+                _isHeistAnalyzing.value = false
+            }
+        }
     }
 
     val todayLeadCount: StateFlow<Int> = clients.map { list ->

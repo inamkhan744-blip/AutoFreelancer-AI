@@ -17,7 +17,7 @@ import java.io.File
 import java.util.UUID
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [36])
+@Config(sdk = [34])
 class TaskRepositoryLocalTest {
 
     private lateinit var context: Context
