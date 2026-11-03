@@ -397,4 +397,144 @@ class AiCloserService(
             providerUsed = "Heuristic ML"
         )
     }
+
+    /**
+     * Parses incoming emails specifically for job-related keywords using the Gemini API,
+     * ensuring only relevant professional client requests are classified as Hot Leads
+     * rather than generic automated audit spam or bot notifications.
+     */
+    suspend fun classifyJobIntentWithGemini(
+        subject: String,
+        incomingMessage: String,
+        geminiApiKey: String,
+        geminiModel: String = AiOrchestrationService.PRIMARY_GEMINI_MODEL
+    ): JobIntentClassification = withContext(Dispatchers.IO) {
+        val lowerText = "$subject\n$incomingMessage".lowercase()
+
+        // 1. Detect Generic Automated Audit Spam & Bot Notifications
+        val spamIndicators = listOf(
+            "automated audit", "seo score 4", "seo score 3", "seo score 2",
+            "noreply", "no-reply", "mailer-daemon", "postmaster",
+            "click here to claim your listing", "newsletter digest",
+            "unsubscribe from our marketing", "system notification",
+            "uptime alert", "ssl certificate notice", "automated report generated",
+            "do not reply to this email", "link exchange request", "guest post offer"
+        )
+        val isSpam = spamIndicators.any { lowerText.contains(it) }
+
+        // 2. Extract Job-Related Keywords (Heuristic check)
+        val candidateJobKeywords = listOf(
+            "hiring", "hire", "quote", "budget", "pricing", "cost", "rates",
+            "proposal", "scope of work", "need help", "freelancer", "consultant",
+            "contract", "redesign", "shopify", "store traffic", "organic traffic dropped",
+            "improve ranking", "seo audit", "technical audit", "retainer", "timeline",
+            "available to start", "work together", "discuss project", "zoom call",
+            "discovery call", "website overhaul"
+        )
+        val matchedKeywords = candidateJobKeywords.filter { keyword ->
+            lowerText.contains(keyword)
+        }.distinct()
+
+        val hasStrongJobSignals = !isSpam && (matchedKeywords.size >= 2 ||
+            (matchedKeywords.size >= 1 && (lowerText.contains("hiring") || lowerText.contains("quote") || lowerText.contains("budget") || lowerText.contains("proposal"))))
+
+        val defaultCategory = when {
+            isSpam -> "Automated Audit Spam / Bot"
+            lowerText.contains("hiring") || lowerText.contains("hire") -> "Hiring Freelance Specialist"
+            lowerText.contains("quote") || lowerText.contains("budget") || lowerText.contains("pricing") -> "Project Quote & Scope Request"
+            lowerText.contains("shopify") || lowerText.contains("store") -> "E-Commerce / Shopify Optimization"
+            lowerText.contains("traffic dropped") || lowerText.contains("need help") -> "Urgent Site Optimization Inbound"
+            hasStrongJobSignals -> "Professional Client Inbound"
+            else -> "General Inquiry"
+        }
+
+        val defaultSummary = if (hasStrongJobSignals) {
+            "Professional client inquiry with job keywords: ${matchedKeywords.take(4).joinToString(", ")}"
+        } else if (isSpam) {
+            "Filtered out as automated audit spam / generic marketing bot."
+        } else {
+            "Standard incoming correspondence without active hiring signals."
+        }
+
+        // 3. Gemini Multimodal / Structured LLM Analysis when API key is available
+        if (geminiApiKey.isNotBlank()) {
+            try {
+                val prompt = """
+                    Classify this incoming email for a freelance web optimization agency:
+                    Subject: $subject
+                    Body:
+                    $incomingMessage
+
+                    Determine if this is a GENUINE PROFESSIONAL CLIENT REQUEST (e.g., business owner looking for help, asking for quotes, hiring a freelancer, discussing a project) vs GENERIC AUTOMATED AUDIT SPAM / BOTS.
+                    Extract specific job keywords (e.g., ["hiring", "quote", "Shopify", "budget ${'$'}1,500"]).
+
+                    Respond ONLY with valid JSON:
+                    {
+                      "is_hot_lead": true,
+                      "job_keywords": ["hiring", "quote", "shopify"],
+                      "client_intent_category": "Hiring Freelancer / Project Inbound",
+                      "summary": "Legitimate business owner inquiring about rates and timeline for store optimization.",
+                      "is_spam_or_automated": false
+                    }
+                """.trimIndent()
+
+                val geminiRes = aiService.generateContentWithFallback(
+                    geminiApiKey = geminiApiKey,
+                    openRouterApiKey = "",
+                    geminiModel = geminiModel,
+                    systemPrompt = "You are an elite lead qualification engine. Output strictly valid JSON.",
+                    userPrompt = prompt,
+                    maxTokens = 200,
+                    temperature = 0.1
+                )
+
+                if (geminiRes.isSuccess) {
+                    val content = geminiRes.getOrThrow().content
+                    val jsonStart = content.indexOf('{')
+                    val jsonEnd = content.lastIndexOf('}')
+                    if (jsonStart != -1 && jsonEnd != -1) {
+                        val parsed = JSONObject(content.substring(jsonStart, jsonEnd + 1))
+                        val isHot = parsed.optBoolean("is_hot_lead", hasStrongJobSignals)
+                        val isSpamResult = parsed.optBoolean("is_spam_or_automated", isSpam)
+                        val intentCat = parsed.optString("client_intent_category", defaultCategory)
+                        val aiSummary = parsed.optString("summary", defaultSummary)
+
+                        val keywordsArray = parsed.optJSONArray("job_keywords")
+                        val aiKeywords = if (keywordsArray != null) {
+                            (0 until keywordsArray.length()).map { keywordsArray.getString(it) }
+                        } else matchedKeywords
+
+                        return@withContext JobIntentClassification(
+                            isHotLead = isHot && !isSpamResult,
+                            jobKeywords = aiKeywords.ifEmpty { matchedKeywords },
+                            clientIntentCategory = intentCat,
+                            summary = aiSummary,
+                            isSpamOrAutomatedAudit = isSpamResult,
+                            providerUsed = "Gemini AI ($geminiModel)"
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(tag, "Gemini hot lead classification fallback: ${e.message}")
+            }
+        }
+
+        JobIntentClassification(
+            isHotLead = hasStrongJobSignals,
+            jobKeywords = matchedKeywords,
+            clientIntentCategory = defaultCategory,
+            summary = defaultSummary,
+            isSpamOrAutomatedAudit = isSpam,
+            providerUsed = "Heuristic Parser"
+        )
+    }
 }
+
+data class JobIntentClassification(
+    val isHotLead: Boolean,
+    val jobKeywords: List<String>,
+    val clientIntentCategory: String,
+    val summary: String,
+    val isSpamOrAutomatedAudit: Boolean,
+    val providerUsed: String = "Gemini AI"
+)

@@ -22,6 +22,7 @@ import com.example.data.service.SearchProspectService
 import com.example.util.BusinessEmailValidator
 import com.example.util.LiveWorkerLogStore
 import com.example.util.ProspectDeduplicator
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import java.util.concurrent.TimeUnit
 
@@ -77,28 +78,24 @@ class AutoPilotWorker(
 
             val canRunDiscovery = settings.isSearchConfigured || settings.isAiConfigured
             if (pendingTasks.isEmpty() && canRunDiscovery) {
-                val calendar = java.util.Calendar.getInstance().apply {
-                    set(java.util.Calendar.HOUR_OF_DAY, 0)
-                    set(java.util.Calendar.MINUTE, 0)
-                    set(java.util.Calendar.SECOND, 0)
-                    set(java.util.Calendar.MILLISECOND, 0)
-                }
-                val todayStart = calendar.timeInMillis
                 val existingClients = clientRepo.observeClients().first()
-                val todayCount = existingClients.count { it.createdAt >= todayStart }
-                if (todayCount >= settings.dailyLeadTarget) {
-                    LiveWorkerLogStore.record(
-                        "Apollo-Scout",
-                        "> Daily target achieved ($todayCount/${settings.dailyLeadTarget} leads). Sleeping until tomorrow."
-                    )
-                    return Result.success()
-                }
 
-                Log.i(tag, "Running autonomous lead discovery in background...")
-                LiveWorkerLogStore.record("Apollo-Scout", "> Querying Serper, Brave, and Google CSE for active prospects...")
+                Log.i(tag, "Running continuous autonomous lead discovery in background (24/7 active)...")
+                LiveWorkerLogStore.record("Apollo-Scout", "> 24/7 Background Scout active. Querying live search engines...")
+
+                // Dynamic client targeted queries rotated randomly
+                val dynamicQueries = listOf(
+                    "site:reddit.com/r/smallbusiness OR site:reddit.com/r/ecommerce (\"need someone to do SEO\" OR \"hiring SEO freelancer\" OR \"organic traffic dropped\") -agency -tool",
+                    "site:reddit.com/r/shopify (\"store traffic dropped\" OR \"need SEO help\" OR \"hiring SEO specialist\") -agency -tool",
+                    "site:reddit.com/r/forhire \"[hiring]\" (\"SEO\" OR \"website optimization\" OR \"search ranking\") -agency",
+                    "site:linkedin.com/posts (\"looking for a freelance SEO\" OR \"need an SEO expert for our business\" OR \"hiring SEO freelancer\") (\"email\" OR \"contact me\") -agency -tool",
+                    "\"Shopify store owner\" (\"looking for SEO\" OR \"need SEO help\" OR \"traffic dropped\") \"contact\" -agency -tool",
+                    "\"founder\" (\"our website traffic dropped\" OR \"looking for freelance SEO\" OR \"need SEO help\") \"@gmail.com\" OR \"@yahoo.com\" -agency -tool -software"
+                )
+                val queryToRun = dynamicQueries.random()
 
                 val searchResult = searchService.searchWithFallback(
-                    query = "need SEO help site:reddit.com OR site:linkedin.com",
+                    query = queryToRun,
                     serperKey = settings.serperApiKey,
                     tavilyKey = settings.tavilyApiKey,
                     braveKey = settings.braveSearchApiKey,
@@ -113,15 +110,34 @@ class AutoPilotWorker(
 
                 var newLeadsCount = 0
                 for (prospect in searchResult.leads) {
+                    // Staggered interval pause to prevent API rate limiting
+                    delay(1500L)
+
+                    // Skip SEO vendor / tool pages
+                    if (SearchProspectService.isAgency(prospect.title, prospect.snippet, prospect.link)) {
+                        continue
+                    }
+
                     val targetWebsite = extractWebsiteUrl(prospect.snippet)
+                    if (targetWebsite.isNotBlank() && SearchProspectService.isAgency("", "", targetWebsite)) {
+                        continue
+                    }
+
                     var discoveredEmail = BusinessEmailValidator.findIn(prospect.snippet).orEmpty()
                     if (discoveredEmail.isBlank()) {
                         val siteToScrape = targetWebsite.ifBlank { prospect.link }
-                        discoveredEmail = searchService.extractEmailFromWebsite(siteToScrape).orEmpty()
+                        if (!SearchProspectService.isAgency("", "", siteToScrape)) {
+                            discoveredEmail = searchService.extractEmailFromWebsite(siteToScrape).orEmpty()
+                        }
                     }
 
                     if (discoveredEmail.isBlank()) {
                         LiveWorkerLogStore.record("Apollo-Scout", "> [Email Hunter] Skipping lead without email: ${prospect.title.take(30)}")
+                        continue
+                    }
+
+                    val emailDomain = discoveredEmail.substringAfter("@").lowercase()
+                    if (SearchProspectService.KNOWN_AGENCY_DOMAINS.any { emailDomain.contains(it) }) {
                         continue
                     }
 

@@ -22,6 +22,10 @@ object AutoPilotScheduler {
                 15, TimeUnit.MINUTES
             )
                 .setConstraints(constraints)
+                .setBackoffCriteria(
+                    androidx.work.BackoffPolicy.EXPONENTIAL,
+                    1, TimeUnit.MINUTES
+                )
                 .build()
 
             workManager.enqueueUniquePeriodicWork(

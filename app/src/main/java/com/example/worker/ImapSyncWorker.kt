@@ -64,6 +64,9 @@ class ImapSyncWorker(
             }
             if (isDuplicate) continue
 
+            // Staggered delay to prevent API rate limiting
+            kotlinx.coroutines.delay(1000L)
+
             val draftResult = if (settings.isAiConfigured) {
                 runCatching {
                     aiCloser.analyzeAndDraftReply(
@@ -82,6 +85,20 @@ class ImapSyncWorker(
                 }.getOrNull()
             } else null
 
+            val scoreResult = aiCloser.scoreLeadConversionProbability(
+                emailBody = reply.body,
+                subject = reply.subject,
+                geminiApiKey = settings.geminiApiKey,
+                geminiModel = settings.geminiModel
+            )
+
+            val jobClassification = aiCloser.classifyJobIntentWithGemini(
+                subject = reply.subject,
+                incomingMessage = reply.body,
+                geminiApiKey = settings.geminiApiKey,
+                geminiModel = settings.geminiModel
+            )
+
             val newInboxEmail = InboxEmail(
                 senderName = reply.senderName,
                 senderEmail = reply.senderEmail,
@@ -92,15 +109,28 @@ class ImapSyncWorker(
                 reasoningAnalysis = draftResult?.reasoningAnalysis.orEmpty(),
                 reasoningStrategy = draftResult?.reasoningStrategy.orEmpty(),
                 nextBestAction = draftResult?.nextBestAction.orEmpty(),
+                conversionProbability = scoreResult.score,
+                intentSummary = scoreResult.summary,
+                isHotLead = jobClassification.isHotLead,
+                jobKeywords = jobClassification.jobKeywords,
+                clientIntentCategory = jobClassification.clientIntentCategory,
                 receivedAt = reply.receivedAt
             )
 
             inboxRepo.upsertMessage(newInboxEmail)
             newlyDraftedCount++
-            LiveWorkerLogStore.record(
-                "IMAP-Sync",
-                "> Received response from ${reply.senderEmail} ('${reply.subject.take(25)}'). AI Objection closer drafted reply."
-            )
+
+            if (jobClassification.isHotLead) {
+                LiveWorkerLogStore.record(
+                    "Hot-Lead",
+                    "🔥 [Hot Lead Detected] ${reply.senderName} (${jobClassification.clientIntentCategory}) - Keywords: ${jobClassification.jobKeywords.joinToString(", ")}"
+                )
+            } else {
+                LiveWorkerLogStore.record(
+                    "IMAP-Sync",
+                    "> Received reply from ${reply.senderEmail} ('${reply.subject.take(25)}'). AI Objection closer drafted reply."
+                )
+            }
         }
 
         Log.i(tag, "IMAP Sync completed. Processed $newlyDraftedCount new replies.")

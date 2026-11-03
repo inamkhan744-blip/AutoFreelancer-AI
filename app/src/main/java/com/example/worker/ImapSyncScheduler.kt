@@ -22,6 +22,11 @@ object ImapSyncScheduler {
                 15, TimeUnit.MINUTES
             )
                 .setConstraints(constraints)
+                .setInitialDelay(7, TimeUnit.MINUTES)
+                .setBackoffCriteria(
+                    androidx.work.BackoffPolicy.EXPONENTIAL,
+                    1, TimeUnit.MINUTES
+                )
                 .build()
 
             workManager.enqueueUniquePeriodicWork(

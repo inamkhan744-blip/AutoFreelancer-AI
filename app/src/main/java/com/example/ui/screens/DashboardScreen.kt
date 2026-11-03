@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
 import android.media.MediaPlayer
 import android.widget.Toast
@@ -106,7 +107,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import android.content.ClipData
+import android.content.ClipboardManager
+import com.example.data.model.CrmClient
+import com.example.data.model.DealPipelineStage
+import com.example.data.model.InboxEmail
 import com.example.data.model.Task
+import com.example.data.service.PaidDealEngine
+import com.example.data.service.ServiceTier
 import com.example.data.service.GeneratedPitch
 import com.example.data.service.GeneratedVoiceNote
 import com.example.ui.components.MonthlyIncomeTrendsCard
@@ -148,8 +156,19 @@ fun DashboardScreen(
     val discoveryProgress by viewModel.discoveryProgress.collectAsState()
     val todayLeadCount by viewModel.todayLeadCount.collectAsState()
     val pipelineTotalValue by viewModel.pipelineTotalValue.collectAsState()
+    val totalEarnedRevenue by viewModel.totalEarnedRevenue.collectAsState()
+    val pendingInvoicesValue by viewModel.pendingInvoicesValue.collectAsState()
+    val paidClientsCount by viewModel.paidClientsCount.collectAsState()
+    val clients by viewModel.clients.collectAsState()
     val monthlyIncomeTrends by viewModel.monthlyIncomeTrends.collectAsState()
     val settings by viewModel.settings.collectAsState()
+    val hotLeads by viewModel.hotLeads.collectAsState()
+    val hotLeadsCount by viewModel.hotLeadsCount.collectAsState()
+
+    var showDealCloserDialog by remember { mutableStateOf(false) }
+    var selectedClientForOffer by remember { mutableStateOf<CrmClient?>(null) }
+    var showRecordPaymentDialog by remember { mutableStateOf(false) }
+    var selectedClientForPayment by remember { mutableStateOf<CrmClient?>(null) }
 
     val userName = "Freelancer Director"
 
@@ -478,24 +497,61 @@ fun DashboardScreen(
                                 .padding(horizontal = 16.dp, vertical = 8.dp)
                         ) {
                             MetricsHeader(metrics = metrics)
+                            Spacer(modifier = Modifier.height(8.dp))
+                            RealDollarRevenueCard(
+                                totalEarnedRevenue = totalEarnedRevenue,
+                                pendingInvoicesValue = pendingInvoicesValue,
+                                paidClientsCount = paidClientsCount,
+                                onOpenDealCloser = {
+                                    selectedClientForOffer = clients.firstOrNull()
+                                    showDealCloserDialog = true
+                                },
+                                onOpenRecordPayment = {
+                                    selectedClientForPayment = clients.firstOrNull()
+                                    showRecordPaymentDialog = true
+                                }
+                            )
                             Spacer(modifier = Modifier.height(12.dp))
                             SearchAndFilterBar(
                                 searchQuery = searchQuery,
                                 onSearchQueryChanged = { viewModel.onSearchQueryChanged(it) },
                                 statusFilter = statusFilter,
-                                onFilterChanged = { viewModel.onStatusFilterChanged(it) }
+                                onFilterChanged = { viewModel.onStatusFilterChanged(it) },
+                                hotLeadsCount = hotLeadsCount
                             )
                             Spacer(modifier = Modifier.height(12.dp))
-                            TaskListContent(
-                                tasksState = tasksState,
-                                selectedTaskId = selectedTask?.id,
-                                onTaskClicked = { viewModel.selectTaskForDetail(it) },
-                                onApprove = { viewModel.approveTask(it) },
-                                onReject = { viewModel.openRejectDialog(it) },
-                                onComplete = { viewModel.completeTask(it.id) },
-                                onScoutClicked = { viewModel.runLeadDiscovery() },
-                                onSettingsClicked = onNavigateToSettings
-                            )
+                            if (statusFilter == "HOT_LEADS") {
+                                HotLeadsDashboardView(
+                                    hotLeads = hotLeads,
+                                    isLoading = isOperationLoading,
+                                    onScanWithGemini = { viewModel.scanAndClassifyAllHotLeads() },
+                                    onSyncImap = { viewModel.syncInboxReplies() },
+                                    onConvertToTask = { viewModel.convertHotLeadToTask(it) },
+                                    onViewInInbox = { viewModel.navigateTo("INBOX") },
+                                    onSendPaidOffer = { email ->
+                                        val match = clients.find { c -> c.email.equals(email.senderEmail, ignoreCase = true) }
+                                            ?: CrmClient(
+                                                name = email.senderName.ifBlank { email.senderEmail.substringBefore("@") },
+                                                email = email.senderEmail,
+                                                company = email.senderEmail.substringAfter("@").substringBefore("."),
+                                                pipelineStage = DealPipelineStage.INTERESTED
+                                            )
+                                        selectedClientForOffer = match
+                                        showDealCloserDialog = true
+                                    }
+                                )
+                            } else {
+                                TaskListContent(
+                                    tasksState = tasksState,
+                                    selectedTaskId = selectedTask?.id,
+                                    onTaskClicked = { viewModel.selectTaskForDetail(it) },
+                                    onApprove = { viewModel.approveTask(it) },
+                                    onReject = { viewModel.openRejectDialog(it) },
+                                    onComplete = { viewModel.completeTask(it.id) },
+                                    onScoutClicked = { viewModel.runLeadDiscovery() },
+                                    onSettingsClicked = onNavigateToSettings
+                                )
+                            }
                         }
 
                         Surface(
@@ -529,6 +585,21 @@ fun DashboardScreen(
                             MetricsHeader(metrics = metrics)
                         }
                         item {
+                            RealDollarRevenueCard(
+                                totalEarnedRevenue = totalEarnedRevenue,
+                                pendingInvoicesValue = pendingInvoicesValue,
+                                paidClientsCount = paidClientsCount,
+                                onOpenDealCloser = {
+                                    selectedClientForOffer = clients.firstOrNull()
+                                    showDealCloserDialog = true
+                                },
+                                onOpenRecordPayment = {
+                                    selectedClientForPayment = clients.firstOrNull()
+                                    showRecordPaymentDialog = true
+                                }
+                            )
+                        }
+                        item {
                             MonthlyIncomeTrendsCard(monthlyPoints = monthlyIncomeTrends)
                         }
                         item {
@@ -536,75 +607,100 @@ fun DashboardScreen(
                                 searchQuery = searchQuery,
                                 onSearchQueryChanged = { viewModel.onSearchQueryChanged(it) },
                                 statusFilter = statusFilter,
-                                onFilterChanged = { viewModel.onStatusFilterChanged(it) }
+                                onFilterChanged = { viewModel.onStatusFilterChanged(it) },
+                                hotLeadsCount = hotLeadsCount
                             )
                         }
-                        when (val state = tasksState) {
-                            is TasksUiState.Loading -> {
-                                item {
-                                    Box(
-                                        modifier = Modifier.fillMaxWidth().padding(32.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        CircularProgressIndicator(color = CyberPrimary)
+                        if (statusFilter == "HOT_LEADS") {
+                            item {
+                                HotLeadsDashboardView(
+                                    hotLeads = hotLeads,
+                                    isLoading = isOperationLoading,
+                                    onScanWithGemini = { viewModel.scanAndClassifyAllHotLeads() },
+                                    onSyncImap = { viewModel.syncInboxReplies() },
+                                    onConvertToTask = { viewModel.convertHotLeadToTask(it) },
+                                    onViewInInbox = { viewModel.navigateTo("INBOX") },
+                                    onSendPaidOffer = { email ->
+                                        val match = clients.find { c -> c.email.equals(email.senderEmail, ignoreCase = true) }
+                                            ?: CrmClient(
+                                                name = email.senderName.ifBlank { email.senderEmail.substringBefore("@") },
+                                                email = email.senderEmail,
+                                                company = email.senderEmail.substringAfter("@").substringBefore("."),
+                                                pipelineStage = DealPipelineStage.INTERESTED
+                                            )
+                                        selectedClientForOffer = match
+                                        showDealCloserDialog = true
                                     }
-                                }
+                                )
                             }
-                            is TasksUiState.Error -> {
-                                item {
-                                    Card(
-                                        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                                        colors = CardDefaults.cardColors(containerColor = CyberError.copy(alpha = 0.1f))
-                                    ) {
-                                        Column(
-                                            modifier = Modifier.padding(16.dp),
-                                            horizontalAlignment = Alignment.CenterHorizontally
+                        } else {
+                            when (val state = tasksState) {
+                                is TasksUiState.Loading -> {
+                                    item {
+                                        Box(
+                                            modifier = Modifier.fillMaxWidth().padding(32.dp),
+                                            contentAlignment = Alignment.Center
                                         ) {
-                                            Text(text = "Unable to load tasks", style = MaterialTheme.typography.titleMedium, color = CyberError)
-                                            Text(text = state.message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            CircularProgressIndicator(color = CyberPrimary)
                                         }
                                     }
                                 }
-                            }
-                            is TasksUiState.Success -> {
-                                if (state.tasks.isEmpty()) {
+                                is TasksUiState.Error -> {
                                     item {
                                         Card(
-                                            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
-                                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
-                                            shape = RoundedCornerShape(12.dp)
+                                            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                                            colors = CardDefaults.cardColors(containerColor = CyberError.copy(alpha = 0.1f))
                                         ) {
                                             Column(
-                                                modifier = Modifier.padding(20.dp).fillMaxWidth(),
+                                                modifier = Modifier.padding(16.dp),
                                                 horizontalAlignment = Alignment.CenterHorizontally
                                             ) {
-                                                Icon(Icons.Default.Work, contentDescription = null, tint = CyberPrimaryLight, modifier = Modifier.size(36.dp))
-                                                Spacer(modifier = Modifier.height(10.dp))
-                                                Text("No tasks currently in pipeline", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold))
-                                                Spacer(modifier = Modifier.height(6.dp))
-                                                Text("Run 24/7 Lead Scout above to find verified clients.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                                Spacer(modifier = Modifier.height(14.dp))
-                                                Button(
-                                                    onClick = { viewModel.runLeadDiscovery() },
-                                                    colors = ButtonDefaults.buttonColors(containerColor = CyberPrimary)
-                                                ) {
-                                                    Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(16.dp))
-                                                    Spacer(modifier = Modifier.width(6.dp))
-                                                    Text("Run 24/7 Lead Hunter")
-                                                }
+                                                Text(text = "Unable to load tasks", style = MaterialTheme.typography.titleMedium, color = CyberError)
+                                                Text(text = state.message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                             }
                                         }
                                     }
-                                } else {
-                                    items(state.tasks, key = { it.id }) { task ->
-                                        TaskItemCard(
-                                            task = task,
-                                            isSelected = task.id == selectedTask?.id,
-                                            onClick = { viewModel.selectTaskForDetail(task) },
-                                            onApprove = { viewModel.approveTask(task) },
-                                            onReject = { viewModel.openRejectDialog(task) },
-                                            onComplete = { viewModel.completeTask(task.id) }
-                                        )
+                                }
+                                is TasksUiState.Success -> {
+                                    if (state.tasks.isEmpty()) {
+                                        item {
+                                            Card(
+                                                modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
+                                                shape = RoundedCornerShape(12.dp)
+                                            ) {
+                                                Column(
+                                                    modifier = Modifier.padding(20.dp).fillMaxWidth(),
+                                                    horizontalAlignment = Alignment.CenterHorizontally
+                                                ) {
+                                                    Icon(Icons.Default.Work, contentDescription = null, tint = CyberPrimaryLight, modifier = Modifier.size(36.dp))
+                                                    Spacer(modifier = Modifier.height(10.dp))
+                                                    Text("No tasks currently in pipeline", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold))
+                                                    Spacer(modifier = Modifier.height(6.dp))
+                                                    Text("Run 24/7 Lead Scout above to find verified clients.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                    Spacer(modifier = Modifier.height(14.dp))
+                                                    Button(
+                                                        onClick = { viewModel.runLeadDiscovery() },
+                                                        colors = ButtonDefaults.buttonColors(containerColor = CyberPrimary)
+                                                    ) {
+                                                        Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                        Spacer(modifier = Modifier.width(6.dp))
+                                                        Text("Run 24/7 Lead Hunter")
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        items(state.tasks, key = { it.id }) { task ->
+                                            TaskItemCard(
+                                                task = task,
+                                                isSelected = task.id == selectedTask?.id,
+                                                onClick = { viewModel.selectTaskForDetail(task) },
+                                                onApprove = { viewModel.approveTask(task) },
+                                                onReject = { viewModel.openRejectDialog(task) },
+                                                onComplete = { viewModel.completeTask(task.id) }
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -831,6 +927,39 @@ fun DashboardScreen(
             },
             onManualCommand = { cmd ->
                 jarvisManager.executeManualCommand(cmd)
+            }
+        )
+    }
+
+    if (showDealCloserDialog) {
+        InstantDealCloserDialog(
+            initialClient = selectedClientForOffer,
+            allClients = clients,
+            agencyName = settings.agencyName,
+            paymentLinkUrl = settings.paymentLinkUrl,
+            onDismiss = { showDealCloserDialog = false },
+            onSendOffer = { client, tier, customNote ->
+                viewModel.sendInstantPaidOffer(client, tier, customNote) { success, msg ->
+                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                }
+            },
+            onRecordPaid = { client, amount ->
+                viewModel.recordCashPaymentCollected(client, amount) { success, msg ->
+                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                }
+            }
+        )
+    }
+
+    if (showRecordPaymentDialog) {
+        RecordPaymentDialog(
+            initialClient = selectedClientForPayment,
+            allClients = clients,
+            onDismiss = { showRecordPaymentDialog = false },
+            onConfirmPayment = { client, amount, method ->
+                viewModel.recordCashPaymentCollected(client, amount, method) { success, msg ->
+                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                }
             }
         )
     }
@@ -1486,7 +1615,8 @@ fun SearchAndFilterBar(
     searchQuery: String,
     onSearchQueryChanged: (String) -> Unit,
     statusFilter: String,
-    onFilterChanged: (String) -> Unit
+    onFilterChanged: (String) -> Unit,
+    hotLeadsCount: Int = 0
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedTextField(
@@ -1516,6 +1646,7 @@ fun SearchAndFilterBar(
         ) {
             val filters = listOf(
                 "ALL" to "All Tasks",
+                "HOT_LEADS" to if (hotLeadsCount > 0) "🔥 Hot Leads ($hotLeadsCount)" else "🔥 Hot Leads",
                 "PENDING" to "Pending Approval",
                 "ACTIVE" to "Active Workers",
                 "COMPLETED" to "Completed",
@@ -1523,14 +1654,16 @@ fun SearchAndFilterBar(
             )
 
             filters.forEach { (key, label) ->
+                val isHotChip = key == "HOT_LEADS"
                 FilterChip(
                     selected = statusFilter == key,
                     onClick = { onFilterChanged(key) },
                     label = { Text(label, fontSize = 12.sp) },
                     shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.testTag("filter_chip_$key"),
                     colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = CyberPrimary.copy(alpha = 0.2f),
-                        selectedLabelColor = CyberPrimaryLight
+                        selectedContainerColor = if (isHotChip) CyberWarning.copy(alpha = 0.25f) else CyberPrimary.copy(alpha = 0.2f),
+                        selectedLabelColor = if (isHotChip) CyberWarning else CyberPrimaryLight
                     )
                 )
             }
@@ -2811,6 +2944,807 @@ fun JarvisVisualIndicatorDialog(
                 colors = ButtonDefaults.buttonColors(containerColor = CyberPrimary)
             ) {
                 Text("Done")
+            }
+        }
+    )
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun HotLeadsDashboardView(
+    hotLeads: List<InboxEmail>,
+    isLoading: Boolean,
+    onScanWithGemini: () -> Unit,
+    onSyncImap: () -> Unit,
+    onConvertToTask: (InboxEmail) -> Unit,
+    onViewInInbox: () -> Unit,
+    onSendPaidOffer: ((InboxEmail) -> Unit)? = null,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("hot_leads_banner"),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            ),
+            shape = RoundedCornerShape(14.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, CyberWarning.copy(alpha = 0.4f))
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Surface(
+                            shape = CircleShape,
+                            color = CyberWarning.copy(alpha = 0.2f),
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Text("🔥", fontSize = 18.sp)
+                            }
+                        }
+                        Column {
+                            Text(
+                                text = "Verified Hot Leads",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Gemini-Parsed Client Intent • Spam & Bots Filtered",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(20.dp),
+                        color = CyberWarning.copy(alpha = 0.15f),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, CyberWarning.copy(alpha = 0.5f))
+                    ) {
+                        Text(
+                            text = "${hotLeads.size} Active",
+                            color = CyberWarning,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = "Incoming emails are parsed by Gemini for real hiring intent (Shopify fixes, traffic drop rescue, audits, budget quotes). Automated SEO tools, UptimeRobot, self-replies & newsletters are suppressed.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 18.sp
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = onScanWithGemini,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("hot_leads_scan_gemini_button"),
+                        colors = ButtonDefaults.buttonColors(containerColor = CyberPrimary),
+                        shape = RoundedCornerShape(10.dp),
+                        enabled = !isLoading
+                    ) {
+                        Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Scan with Gemini", fontSize = 12.sp, maxLines = 1)
+                    }
+
+                    OutlinedButton(
+                        onClick = onSyncImap,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("hot_leads_sync_imap_button"),
+                        shape = RoundedCornerShape(10.dp),
+                        enabled = !isLoading
+                    ) {
+                        Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Sync IMAP Inbox", fontSize = 12.sp, maxLines = 1)
+                    }
+                }
+            }
+        }
+
+        if (hotLeads.isEmpty()) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 12.dp)
+                    .testTag("hot_leads_empty_card"),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                ),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text("🛡️", fontSize = 36.sp)
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = "Spam Shield Active: 0 Hot Leads Found",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Generic automated audit spam, bounce notices, and robot alerts are automatically blocked. When a prospective client emails seeking SEO help or asking for a quote, it will appear here.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Button(
+                        onClick = onScanWithGemini,
+                        colors = ButtonDefaults.buttonColors(containerColor = CyberPrimary),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Analyze Inbox for Hot Leads")
+                    }
+                }
+            }
+        } else {
+            hotLeads.forEach { email ->
+                HotLeadItemCard(
+                    email = email,
+                    onConvertToTask = { onConvertToTask(email) },
+                    onViewInInbox = onViewInInbox,
+                    onSendPaidOffer = onSendPaidOffer?.let { callback -> { callback(email) } }
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun HotLeadItemCard(
+    email: InboxEmail,
+    onConvertToTask: () -> Unit,
+    onViewInInbox: () -> Unit,
+    onSendPaidOffer: (() -> Unit)? = null
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("hot_lead_card_${email.id}"),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        shape = RoundedCornerShape(14.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, CyberWarning.copy(alpha = 0.5f))
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = email.senderName.ifBlank { "Prospective Client" },
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = email.senderEmail,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = CyberPrimaryLight
+                    )
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = CyberWarning.copy(alpha = 0.2f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, CyberWarning)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text("🔥", fontSize = 12.sp)
+                        Text(
+                            text = "${email.conversionProbability}/10 Hot",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = CyberWarning
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                if (email.clientIntentCategory.isNotBlank()) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = CyberPrimary.copy(alpha = 0.15f),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, CyberPrimary.copy(alpha = 0.4f))
+                    ) {
+                        Text(
+                            text = email.clientIntentCategory,
+                            fontSize = 11.sp,
+                            color = CyberPrimaryLight,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
+                }
+
+                email.jobKeywords.forEach { keyword ->
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        border = androidx.compose.foundation.BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
+                    ) {
+                        Text(
+                            text = "#$keyword",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Text(
+                text = email.subject.ifBlank { "(No Subject)" },
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Text(
+                    text = email.incomingMessage.take(280) + if (email.incomingMessage.length > 280) "..." else "",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(10.dp),
+                    lineHeight = 18.sp
+                )
+            }
+
+            if (email.intentSummary.isNotBlank()) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = CyberPrimaryLight, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = email.intentSummary,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = CyberPrimaryLight,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                if (onSendPaidOffer != null) {
+                    Button(
+                        onClick = onSendPaidOffer,
+                        modifier = Modifier
+                            .weight(1.3f)
+                            .testTag("hot_lead_send_offer_button_${email.id}"),
+                        colors = ButtonDefaults.buttonColors(containerColor = CyberTertiary),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("💰 Send $797 Offer", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 11.sp, maxLines = 1)
+                    }
+                }
+
+                Button(
+                    onClick = onConvertToTask,
+                    modifier = Modifier
+                        .weight(1.1f)
+                        .testTag("hot_lead_convert_button_${email.id}"),
+                    colors = ButtonDefaults.buttonColors(containerColor = CyberPrimary),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text("To Deal Task", fontSize = 11.sp, maxLines = 1)
+                }
+
+                OutlinedButton(
+                    onClick = onViewInInbox,
+                    modifier = Modifier
+                        .weight(0.9f)
+                        .testTag("hot_lead_inbox_button_${email.id}"),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text("Inbox", fontSize = 11.sp, maxLines = 1)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun RealDollarRevenueCard(
+    totalEarnedRevenue: Double,
+    pendingInvoicesValue: Double,
+    paidClientsCount: Int,
+    onOpenDealCloser: () -> Unit,
+    onOpenRecordPayment: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val currencyFormat = remember { NumberFormat.getCurrencyInstance(Locale.US).apply { maximumFractionDigits = 0 } }
+
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("real_dollar_revenue_card"),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        border = androidx.compose.foundation.BorderStroke(1.5.dp, CyberTertiary.copy(alpha = 0.6f))
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Surface(
+                        shape = CircleShape,
+                        color = CyberTertiary.copy(alpha = 0.2f),
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text("💵", fontSize = 18.sp)
+                        }
+                    }
+                    Column {
+                        Text(
+                            text = "Real Dollar Revenue & Cash Invoicing",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Direct Stripe / PayPal / USDT Checkout Invoicing",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = CyberTertiary
+                        )
+                    }
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = CyberTertiary.copy(alpha = 0.15f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, CyberTertiary)
+                ) {
+                    Text(
+                        text = "$paidClientsCount Paid Clients",
+                        color = CyberTertiary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Card(
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = CyberTertiary.copy(alpha = 0.12f)
+                    ),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, CyberTertiary.copy(alpha = 0.35f))
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            text = "Collected Cash ($)",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = CyberTertiary
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = currencyFormat.format(totalEarnedRevenue),
+                            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Black),
+                            color = CyberTertiary
+                        )
+                        Text(
+                            text = "Real Bank / Wallet Deposits",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 10.sp
+                        )
+                    }
+                }
+
+                Card(
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = CyberWarning.copy(alpha = 0.12f)
+                    ),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, CyberWarning.copy(alpha = 0.35f))
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            text = "Invoiced Out ($)",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = CyberWarning
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = currencyFormat.format(pendingInvoicesValue),
+                            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Black),
+                            color = CyberWarning
+                        )
+                        Text(
+                            text = "Awaiting Client Payment",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 10.sp
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    onClick = onOpenDealCloser,
+                    modifier = Modifier
+                        .weight(1.2f)
+                        .testTag("btn_quick_deal_closer"),
+                    colors = ButtonDefaults.buttonColors(containerColor = CyberTertiary),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Icon(Icons.Default.Send, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Send Paid Invoice ($)", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1)
+                }
+
+                OutlinedButton(
+                    onClick = onOpenRecordPayment,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("btn_record_payment"),
+                    shape = RoundedCornerShape(10.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, CyberTertiary)
+                ) {
+                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = CyberTertiary, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Record Cash ($)", color = CyberTertiary, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, maxLines = 1)
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun InstantDealCloserDialog(
+    initialClient: CrmClient?,
+    allClients: List<CrmClient>,
+    agencyName: String,
+    paymentLinkUrl: String,
+    onDismiss: () -> Unit,
+    onSendOffer: (CrmClient, ServiceTier, String) -> Unit,
+    onRecordPaid: (CrmClient, Double) -> Unit
+) {
+    var selectedClient by remember { mutableStateOf(initialClient ?: allClients.firstOrNull()) }
+    var selectedTier by remember { mutableStateOf(PaidDealEngine.TIERS[1]) }
+    var customPriceText by remember { mutableStateOf("") }
+    var customNote by remember { mutableStateOf("") }
+    val context = LocalContext.current
+
+    val activeTier = remember(selectedTier, customPriceText) {
+        val customVal = customPriceText.toDoubleOrNull()
+        if (customVal != null && customVal > 0) {
+            selectedTier.copy(priceUsd = customVal, title = "${selectedTier.title} ($${customVal.toInt()})")
+        } else {
+            selectedTier
+        }
+    }
+
+    val previewProposal = remember(selectedClient, activeTier, customNote, agencyName, paymentLinkUrl) {
+        PaidDealEngine.buildClosingProposal(
+            clientName = selectedClient?.name ?: "Valued Client",
+            websiteUrl = selectedClient?.websiteUrl ?: "your website",
+            agencyName = agencyName,
+            tier = activeTier,
+            paymentLinkUrl = paymentLinkUrl,
+            customNote = customNote
+        )
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("💰", fontSize = 20.sp)
+                Text("Close Deal & Dispatch Paid Proposal ($)", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text("Select Client / Lead:", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                if (allClients.isNotEmpty()) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        allClients.take(5).forEach { c ->
+                            FilterChip(
+                                selected = selectedClient?.id == c.id,
+                                onClick = { selectedClient = c },
+                                label = { Text(c.name.ifBlank { c.email }.take(18), fontSize = 11.sp) }
+                            )
+                        }
+                    }
+                } else {
+                    Text("No CRM clients found yet. Run Lead Scout or sync inbox to add prospects.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("Choose High-Ticket Service Package:", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    PaidDealEngine.TIERS.forEach { tier ->
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { selectedTier = tier },
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (selectedTier.id == tier.id) CyberTertiary.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                            ),
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp,
+                                if (selectedTier.id == tier.id) CyberTertiary else MaterialTheme.colorScheme.outlineVariant
+                            ),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(10.dp).fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(tier.title, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    Text(tier.description, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = CyberTertiary.copy(alpha = 0.2f)
+                                ) {
+                                    Text(
+                                        "$${tier.priceUsd.toInt()}",
+                                        fontWeight = FontWeight.Black,
+                                        fontSize = 13.sp,
+                                        color = CyberTertiary,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                OutlinedTextField(
+                    value = customPriceText,
+                    onValueChange = { customPriceText = it },
+                    label = { Text("Custom Price ($ USD, Optional)") },
+                    placeholder = { Text("e.g. 500") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+
+                OutlinedTextField(
+                    value = customNote,
+                    onValueChange = { customNote = it },
+                    label = { Text("Custom Deliverable / Note (Optional)") },
+                    placeholder = { Text("e.g. Including free Shopify schema audit...") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    maxLines = 2
+                )
+
+                Text("Live Proposal & Payment Checkout Preview:", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = previewProposal,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(10.dp),
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        fontSize = 11.sp
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val target = selectedClient ?: allClients.firstOrNull() ?: CrmClient(name = "Client Prospect", email = "prospect@example.com")
+                    onSendOffer(target, activeTier, customNote)
+                    onDismiss()
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = CyberTertiary),
+                modifier = Modifier.testTag("btn_confirm_send_paid_offer")
+            ) {
+                Icon(Icons.Default.Send, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Dispatch Offer ($${activeTier.priceUsd.toInt()})", color = Color.Black, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(
+                    onClick = {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        val clip = ClipData.newPlainText("Deal Offer", previewProposal)
+                        clipboard.setPrimaryClip(clip)
+                        Toast.makeText(context, "Copied proposal & payment link to clipboard!", Toast.LENGTH_SHORT).show()
+                    }
+                ) {
+                    Text("Copy Link")
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("Cancel")
+                }
+            }
+        }
+    )
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun RecordPaymentDialog(
+    initialClient: CrmClient?,
+    allClients: List<CrmClient>,
+    onDismiss: () -> Unit,
+    onConfirmPayment: (CrmClient, Double, String) -> Unit
+) {
+    var selectedClient by remember { mutableStateOf(initialClient ?: allClients.firstOrNull()) }
+    var amountText by remember { mutableStateOf(selectedClient?.let { if (it.proposalPrice > 0) it.proposalPrice.toInt().toString() else "797" } ?: "797") }
+    var selectedPaymentMethod by remember { mutableStateOf("Stripe Checkout") }
+
+    val methods = listOf("Stripe Checkout", "PayPal", "Wise", "Payoneer", "USDT Crypto", "Direct Bank Wire")
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("🎉", fontSize = 22.sp)
+                Text("Record Real Dollar Payment ($)", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "Confirm client payment deposit. This will mark the client as Closed Won, log the transaction, and add the dollars to your Real Earned Cash balance.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Text("Select Paying Client:", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                if (allClients.isNotEmpty()) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        allClients.take(5).forEach { c ->
+                            FilterChip(
+                                selected = selectedClient?.id == c.id,
+                                onClick = {
+                                    selectedClient = c
+                                    if (c.proposalPrice > 0) {
+                                        amountText = c.proposalPrice.toInt().toString()
+                                    }
+                                },
+                                label = { Text(c.name.ifBlank { c.email }.take(18), fontSize = 11.sp) }
+                            )
+                        }
+                    }
+                }
+
+                OutlinedTextField(
+                    value = amountText,
+                    onValueChange = { amountText = it },
+                    label = { Text("Payment Amount ($ USD)") },
+                    leadingIcon = { Text("$", fontWeight = FontWeight.Bold, color = CyberTertiary) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("payment_amount_input"),
+                    shape = RoundedCornerShape(8.dp)
+                )
+
+                Text("Payment Method / Channel:", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    methods.forEach { m ->
+                        FilterChip(
+                            selected = selectedPaymentMethod == m,
+                            onClick = { selectedPaymentMethod = m },
+                            label = { Text(m, fontSize = 11.sp) }
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val target = selectedClient ?: allClients.firstOrNull() ?: CrmClient(name = "Client Prospect")
+                    val amt = amountText.toDoubleOrNull() ?: 797.0
+                    onConfirmPayment(target, amt, selectedPaymentMethod)
+                    onDismiss()
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = CyberTertiary),
+                modifier = Modifier.testTag("btn_confirm_record_payment")
+            ) {
+                Text("Confirm Deposit ($$amountText)", color = Color.Black, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
             }
         }
     )

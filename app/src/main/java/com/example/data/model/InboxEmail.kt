@@ -21,7 +21,11 @@ data class InboxEmail(
     val nextBestAction: String = "",
     // ML Priority Scoring (1-10 Conversion Probability)
     val conversionProbability: Int = 5,
-    val intentSummary: String = ""
+    val intentSummary: String = "",
+    // Gemini Hot Lead Classifier & Professional Job Request Parser
+    val isHotLead: Boolean = false,
+    val jobKeywords: List<String> = emptyList(),
+    val clientIntentCategory: String = ""
 ) {
     fun toMap(): Map<String, Any?> {
         return mapOf(
@@ -40,7 +44,10 @@ data class InboxEmail(
             "reasoningStrategy" to reasoningStrategy,
             "nextBestAction" to nextBestAction,
             "conversionProbability" to conversionProbability,
-            "intentSummary" to intentSummary
+            "intentSummary" to intentSummary,
+            "isHotLead" to isHotLead,
+            "jobKeywords" to jobKeywords.joinToString(","),
+            "clientIntentCategory" to clientIntentCategory
         )
     }
 
@@ -62,11 +69,16 @@ data class InboxEmail(
             put("nextBestAction", nextBestAction)
             put("conversionProbability", conversionProbability)
             put("intentSummary", intentSummary)
+            put("isHotLead", isHotLead)
+            put("jobKeywords", jobKeywords.joinToString(","))
+            put("clientIntentCategory", clientIntentCategory)
         }
     }
 
     companion object {
         fun fromJson(json: JSONObject): InboxEmail {
+            val keywordsRaw = json.optString("jobKeywords", "")
+            val keywordsList = if (keywordsRaw.isNotBlank()) keywordsRaw.split(",").map { it.trim() }.filter { it.isNotBlank() } else emptyList()
             return InboxEmail(
                 id = json.optString("id", UUID.randomUUID().toString()),
                 senderName = json.optString("senderName", "Client"),
@@ -83,7 +95,10 @@ data class InboxEmail(
                 reasoningStrategy = json.optString("reasoningStrategy", ""),
                 nextBestAction = json.optString("nextBestAction", ""),
                 conversionProbability = json.optInt("conversionProbability", 5).coerceIn(1, 10),
-                intentSummary = json.optString("intentSummary", "")
+                intentSummary = json.optString("intentSummary", ""),
+                isHotLead = json.optBoolean("isHotLead", false),
+                jobKeywords = keywordsList,
+                clientIntentCategory = json.optString("clientIntentCategory", "")
             )
         }
 
@@ -92,6 +107,16 @@ data class InboxEmail(
                 is Number -> p.toInt()
                 is String -> p.toIntOrNull() ?: 5
                 else -> 5
+            }
+            val isHot = when (val h = map["isHotLead"]) {
+                is Boolean -> h
+                is String -> h.toBooleanStrictOrNull() ?: false
+                else -> false
+            }
+            val keywordsList = when (val k = map["jobKeywords"]) {
+                is List<*> -> k.mapNotNull { it?.toString() }
+                is String -> if (k.isNotBlank()) k.split(",").map { it.trim() }.filter { it.isNotBlank() } else emptyList()
+                else -> emptyList()
             }
             return InboxEmail(
                 id = id,
@@ -109,7 +134,10 @@ data class InboxEmail(
                 reasoningStrategy = map["reasoningStrategy"] as? String ?: "",
                 nextBestAction = map["nextBestAction"] as? String ?: "",
                 conversionProbability = convProb.coerceIn(1, 10),
-                intentSummary = map["intentSummary"] as? String ?: ""
+                intentSummary = map["intentSummary"] as? String ?: "",
+                isHotLead = isHot,
+                jobKeywords = keywordsList,
+                clientIntentCategory = map["clientIntentCategory"] as? String ?: ""
             )
         }
     }

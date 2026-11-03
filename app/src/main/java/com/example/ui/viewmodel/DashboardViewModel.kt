@@ -37,6 +37,8 @@ import com.example.data.service.GeneratedVoiceNote
 import com.example.data.service.SearchExecutionResult
 import com.example.data.service.SearchProspectService
 import com.example.data.service.SeoAuditService
+import com.example.data.service.PaidDealEngine
+import com.example.data.service.ServiceTier
 import com.example.data.service.SeoReportResult
 import com.example.data.service.ImapEmailService
 import com.example.data.service.ReportGeneratorService
@@ -48,6 +50,7 @@ import com.example.worker.AutoPilotScheduler
 import com.example.worker.ImapSyncScheduler
 import android.net.Uri
 import android.os.Environment
+import com.google.firebase.Timestamp
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -137,12 +140,23 @@ class DashboardViewModel(
             initialValue = emptyList()
         )
 
+    val hotLeads: StateFlow<List<InboxEmail>> = inboxEmails.map { emails ->
+        emails.filter { it.isHotLead }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
+    val hotLeadsCount: StateFlow<Int> = hotLeads.map { it.size }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
     val settings: StateFlow<AppSettings> = settingsRepository.settingsFlow
 
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
 
-    private val _statusFilter = MutableStateFlow("ALL") // ALL, PENDING, ACTIVE, COMPLETED, REJECTED
+    private val _statusFilter = MutableStateFlow("ALL") // ALL, PENDING, ACTIVE, COMPLETED, REJECTED, HOT_LEADS
     val statusFilter: StateFlow<String> = _statusFilter.asStateFlow()
 
     private val _activeNotification = MutableStateFlow<WorkerNotification?>(null)
@@ -181,6 +195,27 @@ class DashboardViewModel(
     val pipelineTotalValue: StateFlow<Double> = clients.map { list ->
         list.sumOf { it.estimatedValue }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.0)
+
+    val totalEarnedRevenue: StateFlow<Double> = clients.map { list ->
+        list.filter {
+            DealPipelineStage.normalize(it.pipelineStage) == DealPipelineStage.WON ||
+            it.paymentStatus.equals("PAID", ignoreCase = true)
+        }.sumOf { if (it.proposalPrice > 0) it.proposalPrice else it.estimatedValue }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.0)
+
+    val pendingInvoicesValue: StateFlow<Double> = clients.map { list ->
+        list.filter {
+            it.paymentStatus.equals("INVOICED", ignoreCase = true) ||
+            DealPipelineStage.normalize(it.pipelineStage) == DealPipelineStage.PROPOSAL_SENT
+        }.sumOf { if (it.proposalPrice > 0) it.proposalPrice else it.estimatedValue }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.0)
+
+    val paidClientsCount: StateFlow<Int> = clients.map { list ->
+        list.count {
+            DealPipelineStage.normalize(it.pipelineStage) == DealPipelineStage.WON ||
+            it.paymentStatus.equals("PAID", ignoreCase = true)
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
     val unresponsiveLeads: StateFlow<List<CrmClient>> = clients.map { list ->
         list.filter { it.isUnresponsive48Hours }
@@ -415,6 +450,7 @@ class DashboardViewModel(
                 "ACTIVE" -> tasks.filter { it.status == "APPROVED" || it.status == "RUNNING" }
                 "COMPLETED" -> tasks.filter { it.status == "COMPLETED" }
                 "REJECTED" -> tasks.filter { it.status == "REJECTED" }
+                "HOT_LEADS" -> emptyList()
                 else -> tasks
             }
         }
@@ -2231,6 +2267,23 @@ class DashboardViewModel(
                     geminiModel = config.geminiModel
                 )
 
+                // Gemini-Powered Job Intent Classification & Automated Audit Spam Suppression
+                val intentClassification = closerService.classifyJobIntentWithGemini(
+                    subject = email.subject,
+                    incomingMessage = email.body,
+                    geminiApiKey = config.geminiApiKey,
+                    geminiModel = config.geminiModel
+                )
+
+                if (intentClassification.isSpamOrAutomatedAudit) {
+                    LiveWorkerLogStore.record("IMAP Sync", "Suppressed automated audit/spam email: '${email.subject}' from ${email.senderEmail}")
+                    continue
+                }
+
+                val isHot = intentClassification.isHotLead
+                val finalScore = if (isHot) maxOf(scoreResult.score, 8) else scoreResult.score
+                val finalSummary = if (intentClassification.summary.isNotBlank()) intentClassification.summary else scoreResult.summary
+
                 val inboxEmail = InboxEmail(
                     senderName = email.senderName,
                     senderEmail = email.senderEmail,
@@ -2241,11 +2294,21 @@ class DashboardViewModel(
                     reasoningAnalysis = draftResult?.reasoningAnalysis.orEmpty(),
                     reasoningStrategy = draftResult?.reasoningStrategy.orEmpty(),
                     nextBestAction = draftResult?.nextBestAction.orEmpty(),
-                    conversionProbability = scoreResult.score,
-                    intentSummary = scoreResult.summary,
-                    receivedAt = email.receivedAt
+                    conversionProbability = finalScore,
+                    intentSummary = finalSummary,
+                    receivedAt = email.receivedAt,
+                    isHotLead = isHot,
+                    jobKeywords = intentClassification.jobKeywords,
+                    clientIntentCategory = intentClassification.clientIntentCategory
                 )
                 inboxRepository?.upsertMessage(inboxEmail)
+
+                if (isHot) {
+                    LiveWorkerLogStore.record(
+                        "IMAP Sync",
+                        "🔥 [Hot Lead Detected] ${email.senderName} (${email.senderEmail}): [${intentClassification.clientIntentCategory}] - Keywords: ${intentClassification.jobKeywords.joinToString(", ")}"
+                    )
+                }
 
                 // Match sender to CRM client and elevate to INTERESTED
                 val existingClient = clients.value.find { c ->
@@ -2460,6 +2523,209 @@ class DashboardViewModel(
                 onResult(true, "Transcribed & attached voice memo to ${client.name}!")
             } catch (e: Exception) {
                 onResult(false, e.message ?: "Failed to process voice memo")
+            } finally {
+                _isOperationLoading.value = false
+            }
+        }
+    }
+
+    fun scanAndClassifyAllHotLeads(onComplete: ((Int) -> Unit)? = null) {
+        val config = settings.value
+        val allEmails = inboxEmails.value
+        if (allEmails.isEmpty()) {
+            LiveWorkerLogStore.record("Gemini-Filter", "No emails in inbox to scan. Try fetching live IMAP replies first.")
+            onComplete?.invoke(0)
+            return
+        }
+
+        viewModelScope.launch {
+            _isOperationLoading.value = true
+            LiveWorkerLogStore.record(
+                "Gemini-Filter",
+                "Analyzing ${allEmails.size} inbox emails with Gemini job-intent classifier..."
+            )
+            var hotLeadCount = 0
+            for (email in allEmails) {
+                val classification = closerService.classifyJobIntentWithGemini(
+                    subject = email.subject,
+                    incomingMessage = email.incomingMessage,
+                    geminiApiKey = config.geminiApiKey,
+                    geminiModel = config.geminiModel
+                )
+
+                val updated = email.copy(
+                    isHotLead = classification.isHotLead,
+                    jobKeywords = classification.jobKeywords,
+                    clientIntentCategory = classification.clientIntentCategory,
+                    conversionProbability = if (classification.isHotLead) maxOf(email.conversionProbability, 8) else email.conversionProbability,
+                    intentSummary = if (classification.summary.isNotBlank()) classification.summary else email.intentSummary
+                )
+                inboxRepository?.upsertMessage(updated)
+
+                if (classification.isHotLead) {
+                    hotLeadCount++
+                    LiveWorkerLogStore.record(
+                        "Gemini-Filter",
+                        "🔥 [Hot Lead Detected] ${email.senderName} (${email.senderEmail}): [${classification.clientIntentCategory}] - Keywords: ${classification.jobKeywords.joinToString(", ")}"
+                    )
+                }
+            }
+
+            LiveWorkerLogStore.record(
+                "Gemini-Filter",
+                "Job classification completed: $hotLeadCount hot client requests flagged out of ${allEmails.size} emails."
+            )
+            _isOperationLoading.value = false
+            onComplete?.invoke(hotLeadCount)
+        }
+    }
+
+    fun convertHotLeadToTask(email: InboxEmail, estimatedValue: Double = 750.0) {
+        viewModelScope.launch {
+            val task = Task(
+                id = "task_" + UUID.randomUUID().toString().take(8),
+                title = "Hot Deal: Close ${email.senderName.ifBlank { email.senderEmail }}",
+                category = "AI Closer & Negotiation Director",
+                workerName = "AI Closer & Negotiation Director",
+                workerRole = "Deal Negotiation Specialist",
+                status = "PENDING",
+                priority = "HIGH",
+                client = email.senderName.ifBlank { email.senderEmail.substringBefore("@") },
+                clientEmail = email.senderEmail,
+                estimatedValue = estimatedValue,
+                details = "Client Request: ${email.jobKeywords.joinToString(", ").ifBlank { email.subject }}\n\nMessage:\n${email.incomingMessage.take(400)}\n\nDraft Reply:\n${email.draftedReply}",
+                createdAt = Timestamp.now(),
+                updatedAt = Timestamp.now()
+            )
+            repository.createTask(task)
+            LiveWorkerLogStore.record(
+                "Task Engine",
+                "Created high-priority deal task for Hot Lead: ${email.senderName} ($${estimatedValue.toInt()})"
+            )
+
+            // Also elevate or create client in CRM
+            val existingClient = clients.value.find { c ->
+                c.email.equals(email.senderEmail, ignoreCase = true)
+            }
+            if (existingClient != null) {
+                clientRepository?.updateClientStatus(existingClient.id, DealPipelineStage.INTERESTED)
+            } else {
+                val newClient = CrmClient(
+                    name = email.senderName.ifBlank { email.senderEmail.substringBefore("@") },
+                    email = email.senderEmail,
+                    company = email.senderEmail.substringAfter("@").substringBefore("."),
+                    pipelineStage = DealPipelineStage.INTERESTED,
+                    estimatedValue = estimatedValue,
+                    proposalPrice = estimatedValue,
+                    enrichmentNotes = "Auto-created from Hot Inbound Lead. Keywords: ${email.jobKeywords.joinToString(", ")}"
+                )
+                clientRepository?.upsertClient(newClient)
+            }
+        }
+    }
+
+    fun sendInstantPaidOffer(
+        client: CrmClient,
+        tier: ServiceTier,
+        customNote: String = "",
+        onComplete: (Boolean, String) -> Unit = { _, _ -> }
+    ) {
+        val config = settings.value
+        viewModelScope.launch {
+            _isOperationLoading.value = true
+            try {
+                val proposalText = PaidDealEngine.buildClosingProposal(
+                    clientName = client.name,
+                    websiteUrl = client.websiteUrl,
+                    agencyName = config.agencyName,
+                    tier = tier,
+                    paymentLinkUrl = config.paymentLinkUrl,
+                    customNote = customNote
+                )
+
+                val sentOverEmail = if (config.brevoApiKey.isNotBlank() && client.email.isNotBlank()) {
+                    val emailRes = emailService.sendEmail(
+                        apiKey = config.brevoApiKey,
+                        toEmail = client.email,
+                        subject = "Proposal: ${tier.title} for ${client.websiteUrl.ifBlank { client.name }}",
+                        bodyText = proposalText,
+                        htmlContent = proposalText.replace("\n", "<br/>")
+                    )
+                    emailRes.isSuccess
+                } else false
+
+                val updatedClient = client.copy(
+                    proposalPrice = tier.priceUsd,
+                    estimatedValue = tier.priceUsd,
+                    paymentStatus = "INVOICED",
+                    pipelineStage = DealPipelineStage.PROPOSAL_SENT,
+                    proposalHtml = proposalText,
+                    lastContactedAt = System.currentTimeMillis(),
+                    updatedAt = System.currentTimeMillis()
+                )
+                clientRepository?.upsertClient(updatedClient)
+
+                val task = Task(
+                    id = "task_" + UUID.randomUUID().toString().take(8),
+                    title = "Pending Deal ($${tier.priceUsd.toInt()}): ${client.name}",
+                    category = "AI Deal Closer & Invoicing",
+                    workerName = "AI Deal Closer & Invoicing",
+                    workerRole = "Revenue Specialist",
+                    status = "PENDING",
+                    priority = "HIGH",
+                    client = client.name,
+                    clientEmail = client.email,
+                    estimatedValue = tier.priceUsd,
+                    details = "Sent ${tier.title} package for $${tier.priceUsd.toInt()} USD.\n\nProposal:\n$proposalText",
+                    createdAt = Timestamp.now(),
+                    updatedAt = Timestamp.now()
+                )
+                repository.createTask(task)
+
+                LiveWorkerLogStore.record(
+                    "Deal Closer",
+                    "🚀 [OFFER DISPATCHED] Sent $${tier.priceUsd.toInt()} Paid Offer to ${client.name} (${client.email}). Status: INVOICED."
+                )
+
+                val msg = if (sentOverEmail) {
+                    "Dispatched $${tier.priceUsd.toInt()} proposal with direct payment checkout to ${client.email}!"
+                } else {
+                    "Generated $${tier.priceUsd.toInt()} proposal with payment checkout link! Ready to send."
+                }
+                onComplete(true, msg)
+            } catch (e: Exception) {
+                onComplete(false, e.message ?: "Failed to generate offer")
+            } finally {
+                _isOperationLoading.value = false
+            }
+        }
+    }
+
+    fun recordCashPaymentCollected(
+        client: CrmClient,
+        amount: Double,
+        paymentMethod: String = "Stripe / PayPal",
+        onComplete: (Boolean, String) -> Unit = { _, _ -> }
+    ) {
+        viewModelScope.launch {
+            _isOperationLoading.value = true
+            try {
+                val updatedClient = client.copy(
+                    paymentStatus = "PAID",
+                    pipelineStage = DealPipelineStage.WON,
+                    proposalPrice = amount,
+                    estimatedValue = amount,
+                    updatedAt = System.currentTimeMillis()
+                )
+                clientRepository?.upsertClient(updatedClient)
+
+                LiveWorkerLogStore.record(
+                    "Revenue Engine",
+                    "💰 [DOLLAR PAYMENT COLLECTED] +$${amount.toInt()} USD confirmed via $paymentMethod from ${client.name}! Moved to Closed Won."
+                )
+                onComplete(true, "🎉 Payment of $${amount.toInt()} USD recorded for ${client.name}!")
+            } catch (e: Exception) {
+                onComplete(false, e.message ?: "Failed to record payment")
             } finally {
                 _isOperationLoading.value = false
             }
