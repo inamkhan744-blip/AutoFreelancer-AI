@@ -68,10 +68,99 @@ class SeoAuditServiceTest {
                 "Must include 5-point audit elements or CTA",
                 report.generatedReport.contains("5-POINT") || report.generatedReport.contains("Point") || report.generatedReport.contains("AUDIT")
             )
+            assertTrue(
+                "Must include Done-For-You Retainer upsell",
+                report.generatedReport.contains(SeoAuditService.DONE_FOR_YOU_UPSELL_TEXT)
+            )
+            assertTrue("Must include technical solutions", report.solutions.isNotEmpty())
         } else {
             // Offline environment test runner - expected network exception
             val err = result.exceptionOrNull()
             assertNotNull(err)
         }
+    }
+
+    @Test
+    fun buildDefaultTechnicalSolutions_returnsActionableThreePartFixes() {
+        val rawData = RawSeoData(
+            url = "https://ecombrand.store",
+            httpStatus = 200,
+            latencyMs = 1200,
+            title = "Eco Clean Products",
+            metaDescription = null,
+            h1Heading = null,
+            canonicalUrl = null,
+            hasViewport = true,
+            robots = null,
+            issuesIdentified = listOf("Missing Meta Description", "Slow Images"),
+            rawAuditSummary = "Sample Audit Summary"
+        )
+        val solutions = service.buildDefaultTechnicalSolutions(rawData)
+        assertEquals(5, solutions.size)
+
+        // Verify Slow Images solution contains <img loading="lazy">
+        val slowImages = solutions.find { it.issueFound.contains("Slow Images", ignoreCase = true) }
+        assertNotNull(slowImages)
+        assertTrue(slowImages!!.exactSolution.isNotBlank())
+        assertTrue(slowImages.codeSnippet!!.contains("loading=\"lazy\""))
+
+        // Verify Meta Description solution contains <meta name="description">
+        val metaDesc = solutions.find { it.issueFound.contains("Meta Description", ignoreCase = true) }
+        assertNotNull(metaDesc)
+        assertTrue(metaDesc!!.codeSnippet!!.contains("<meta name=\"description\""))
+
+        // Verify Keyword Cannibalization contains step-by-step plan and 301 redirect
+        val cannibalization = solutions.find { it.issueFound.contains("Cannibalization", ignoreCase = true) }
+        assertNotNull(cannibalization)
+        assertTrue(cannibalization!!.exactSolution.contains("Step-by-step", ignoreCase = true))
+        assertTrue(cannibalization.codeSnippet!!.contains("Redirect 301"))
+    }
+
+    @Test
+    fun parseTechnicalSolutions_extractsThreePartStructure() {
+        val rawData = RawSeoData(
+            url = "https://testbrand.com",
+            httpStatus = 200,
+            latencyMs = 450,
+            title = "Test Brand",
+            metaDescription = "Existing",
+            h1Heading = "Heading",
+            canonicalUrl = "https://testbrand.com",
+            hasViewport = true,
+            robots = null,
+            issuesIdentified = emptyList(),
+            rawAuditSummary = ""
+        )
+        val sampleAiReport = """
+            # SEO Technical Audit
+            - **Issue Found**: Slow Images on Homepage
+            - **Impact**: Google flags mobile Core Web Vitals resulting in search demotion
+            - **Exact Solution**: Add native lazy loading to image elements:
+            ```html
+            <img src="banner.webp" loading="lazy" alt="Banner">
+            ```
+            
+            - **Issue Found**: Missing Meta Description
+            - **Impact**: Google renders truncated snippets lowering CTR
+            - **Exact Solution**: Add description to head:
+            ```html
+            <meta name="description" content="Quality goods for modern buyers.">
+            ```
+            
+            - **Issue Found**: Keyword Cannibalization
+            - **Impact**: Two pages compete for same keyword cluster
+            - **Exact Solution**: Step 1: Merge content into master page. Step 2: 301 redirect.
+            ```apache
+            Redirect 301 /competing /master
+            ```
+        """.trimIndent()
+
+        val parsed = service.parseTechnicalSolutions(sampleAiReport, rawData)
+        assertEquals(3, parsed.size)
+        assertEquals("Slow Images on Homepage", parsed[0].issueFound)
+        assertTrue(parsed[0].codeSnippet!!.contains("loading=\"lazy\""))
+        assertEquals("Missing Meta Description", parsed[1].issueFound)
+        assertTrue(parsed[1].codeSnippet!!.contains("<meta name=\"description\""))
+        assertEquals("Keyword Cannibalization", parsed[2].issueFound)
     }
 }

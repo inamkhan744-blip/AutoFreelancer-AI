@@ -120,10 +120,10 @@ class PdfReportService {
 
         curY += 12f
         val findings = if (auditFindings.isNotEmpty()) auditFindings else listOf(
-            "1. Core Web Vitals LCP Latency: Mobile speed drop causing high bounce rates on key landing pages.",
-            "2. Unranked Commercial Intent Keywords: Top direct competitors capture 74% of high-intent search buyers.",
-            "3. Indexing & Canonical Fragmentation: Orphaned URLs and redirect chains diluting search authority.",
-            "4. Structured Schema Gaps: Missing Rich Snippets, FAQ, and Product Schema leading to lower CTR."
+            "1. Slow Images & High LCP: Add native HTML lazy loading (<img loading=\"lazy\">) & WebP compression.",
+            "2. Missing Meta Description: Add keyword-optimized <meta name=\"description\" content=\"...\"> tag.",
+            "3. Keyword Cannibalization: Merge competing URLs with 301 redirects and canonical links.",
+            "4. Content & H1 Architecture: Anchor primary search intent with a single semantic <h1> tag."
         )
 
         paint.textSize = 9.5f
@@ -190,16 +190,16 @@ class PdfReportService {
         paint.style = Paint.Style.FILL
 
         paint.color = Color.rgb(67, 56, 202)
-        paint.textSize = 11f
+        paint.textSize = 10.5f
         paint.isFakeBoldText = true
-        canvas.drawText("E-Commerce Retainer ★", 215f, curY + 22f, paint)
+        canvas.drawText("Done-For-You Retainer ★", 215f, curY + 22f, paint)
         paint.textSize = 16f
         paint.color = Color.rgb(79, 70, 229)
         canvas.drawText("$797 / mo", 215f, curY + 44f, paint)
         paint.textSize = 8.5f
         paint.isFakeBoldText = false
         paint.color = Color.rgb(71, 85, 105)
-        canvas.drawText("Halt daily bleed & grow sales", 215f, curY + 62f, paint)
+        canvas.drawText("Done-For-You: We handle all fixes", 215f, curY + 62f, paint)
 
         // Tier 3 Card
         val t3Box = RectF(400f, curY, 559f, curY + 80f)

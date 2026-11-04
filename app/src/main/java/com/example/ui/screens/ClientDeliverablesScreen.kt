@@ -40,7 +40,7 @@ import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Send
-import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -80,7 +80,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.CrmClient
 import com.example.data.service.RawSeoData
+import com.example.data.service.SeoAuditService
 import com.example.data.service.SeoReportResult
+import com.example.data.service.TechnicalSolution
 import com.example.ui.theme.CyberError
 import com.example.ui.theme.CyberPrimary
 import com.example.ui.theme.CyberPrimaryLight
@@ -119,6 +121,7 @@ fun ClientDeliverablesScreen(
     var isGenerating by remember { mutableStateOf(false) }
     var lastReportResult by remember { mutableStateOf<SeoReportResult?>(null) }
     var generationErrorMessage by remember { mutableStateOf<String?>(null) }
+    var showTechnicalSolutions by remember { mutableStateOf(false) }
 
     // Email Dispatch Modal State
     var emailDialogOpen by remember { mutableStateOf(false) }
@@ -411,7 +414,7 @@ fun ClientDeliverablesScreen(
                                     OutlinedButton(
                                         onClick = {
                                             targetEmailRecipient = clientEmailInput.trim()
-                                            targetEmailSubject = "SEO Audit & 5-Point Growth Plan for ${reportResult.targetUrl}"
+                                            targetEmailSubject = "SEO Audit & Solutions Dossier for ${reportResult.targetUrl}"
                                             targetEmailBody = reportResult.generatedReport
                                             emailDialogOpen = true
                                         },
@@ -422,6 +425,30 @@ fun ClientDeliverablesScreen(
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Text("Email to Client")
                                     }
+
+                                    OutlinedButton(
+                                        onClick = { showTechnicalSolutions = !showTechnicalSolutions },
+                                        modifier = Modifier.testTag("toggle_technical_solutions"),
+                                        shape = RoundedCornerShape(8.dp),
+                                        colors = ButtonDefaults.outlinedButtonColors(
+                                            contentColor = if (showTechnicalSolutions) CyberPrimary else MaterialTheme.colorScheme.onSurface
+                                        )
+                                    ) {
+                                        Icon(Icons.Default.Code, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(if (showTechnicalSolutions) "Hide Technical Solutions" else "Show Technical Solutions")
+                                    }
+                                }
+
+                                AnimatedVisibility(visible = showTechnicalSolutions) {
+                                    val solutions = reportResult.solutions.ifEmpty {
+                                        SeoAuditService().buildDefaultTechnicalSolutions(reportResult.rawData)
+                                    }
+                                    TechnicalSolutionsPanel(
+                                        solutions = solutions,
+                                        onCopySnippet = { snippet, label -> copyToClipboard(snippet, label) },
+                                        modifier = Modifier.padding(top = 8.dp)
+                                    )
                                 }
                             }
                         }
@@ -470,7 +497,8 @@ fun ClientDeliverablesScreen(
                             targetEmailSubject = "SEO Audit Report for ${client.name}"
                             targetEmailBody = client.seoReport
                             emailDialogOpen = true
-                        }
+                        },
+                        onCopySnippet = { snippet, label -> copyToClipboard(snippet, label) }
                     )
                 }
             }
@@ -628,9 +656,11 @@ private fun RawMetaCard(rawData: RawSeoData) {
 private fun DeliverableHistoryItem(
     client: CrmClient,
     onCopy: () -> Unit,
-    onEmail: () -> Unit
+    onEmail: () -> Unit,
+    onCopySnippet: (String, String) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
+    var showHistorySolutions by remember { mutableStateOf(false) }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -696,8 +726,18 @@ private fun DeliverableHistoryItem(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                TextButton(onClick = { expanded = !expanded }) {
-                    Text(if (expanded) "Hide Report" else "View Report")
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(onClick = { expanded = !expanded }) {
+                        Text(if (expanded) "Hide Text" else "View Text")
+                    }
+                    TextButton(
+                        onClick = { showHistorySolutions = !showHistorySolutions },
+                        modifier = Modifier.testTag("history_toggle_technical_solutions")
+                    ) {
+                        Icon(Icons.Default.Code, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(if (showHistorySolutions) "Hide Solutions" else "Show Technical Solutions")
+                    }
                 }
 
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -716,6 +756,274 @@ private fun DeliverableHistoryItem(
                         Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(14.dp))
                         Spacer(modifier = Modifier.width(4.dp))
                         Text("Email")
+                    }
+                }
+            }
+
+            AnimatedVisibility(visible = showHistorySolutions) {
+                val dummyRaw = RawSeoData(
+                    url = client.websiteUrl.ifBlank { "https://${client.company.ifBlank { "client" }}.com" },
+                    httpStatus = 200,
+                    latencyMs = 380,
+                    title = client.company.ifBlank { client.name },
+                    metaDescription = null,
+                    h1Heading = null,
+                    canonicalUrl = null,
+                    hasViewport = true,
+                    robots = null,
+                    issuesIdentified = listOf("Missing Meta Description", "Slow Images", "Keyword Cannibalization"),
+                    rawAuditSummary = "Audit for ${client.name}"
+                )
+                val solutions = SeoAuditService().parseTechnicalSolutions(client.seoReport, dummyRaw)
+                TechnicalSolutionsPanel(
+                    solutions = solutions,
+                    onCopySnippet = onCopySnippet,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun TechnicalSolutionsPanel(
+    solutions: List<TechnicalSolution>,
+    onCopySnippet: (String, String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("technical_solutions_panel"),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFF0F172A)
+        ),
+        border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFF38BDF8).copy(alpha = 0.5f))
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Code,
+                        contentDescription = null,
+                        tint = Color(0xFF38BDF8),
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Text(
+                        text = "Technical Solutions (Developer Fixes)",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = Color.White
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Color(0xFF38BDF8).copy(alpha = 0.2f))
+                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                ) {
+                    Text(
+                        text = "Ready to Copy-Paste",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = Color(0xFF38BDF8)
+                    )
+                }
+            }
+
+            Text(
+                text = "Three-part actionable diagnosis: Issue Found • Impact • Exact Developer Solution",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFF94A3B8)
+            )
+
+            solutions.forEachIndexed { index, item ->
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("solution_item_$index"),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = Color(0xFF1E293B)
+                    ),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF334155))
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(CircleShape)
+                                    .background(Color(0xFFEF4444).copy(alpha = 0.2f))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = "#${index + 1}",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = Color(0xFFF87171)
+                                )
+                            }
+                            Text(
+                                text = item.issueFound,
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                color = Color(0xFFF1F5F9)
+                            )
+                        }
+
+                        // Impact section
+                        Column(modifier = Modifier.padding(top = 2.dp)) {
+                            Text(
+                                text = "• IMPACT:",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                color = Color(0xFFF59E0B)
+                            )
+                            Text(
+                                text = item.impact,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFFCBD5E1)
+                            )
+                        }
+
+                        // Exact Solution section
+                        Column(modifier = Modifier.padding(top = 2.dp)) {
+                            Text(
+                                text = "• EXACT SOLUTION:",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                color = Color(0xFF10B981)
+                            )
+                            Text(
+                                text = item.exactSolution,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFFE2E8F0)
+                            )
+                        }
+
+                        // Code snippet box with copy button
+                        if (!item.codeSnippet.isNullOrBlank()) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 4.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Color(0xFF090D16))
+                                    .border(1.dp, Color(0xFF334155), RoundedCornerShape(8.dp))
+                                    .padding(10.dp)
+                            ) {
+                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = if (item.isStepByStepPlan) "Step-by-Step Merge Plan" else "Developer Code Snippet",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = Color(0xFF64748B)
+                                        )
+                                        TextButton(
+                                            onClick = {
+                                                onCopySnippet(item.codeSnippet, "Code Snippet #${index + 1}")
+                                            },
+                                            modifier = Modifier.testTag("copy_snippet_button_$index"),
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Default.ContentCopy,
+                                                contentDescription = null,
+                                                tint = Color(0xFF38BDF8),
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text(
+                                                "Copy Code",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                                color = Color(0xFF38BDF8)
+                                            )
+                                        }
+                                    }
+                                    Text(
+                                        text = item.codeSnippet,
+                                        style = MaterialTheme.typography.bodySmall.copy(
+                                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                            fontSize = 11.5.sp
+                                        ),
+                                        color = Color(0xFF38BDF8)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // High-Converting Done-For-You Upsell Box
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp),
+                shape = RoundedCornerShape(10.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = Color(0xFF2E1065)
+                ),
+                border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFFA855F7))
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(Color(0xFFA855F7))
+                            .padding(horizontal = 8.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = "DONE-FOR-YOU IMPLEMENTATION",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold),
+                            color = Color.White
+                        )
+                    }
+                    Text(
+                        text = "Need me to implement these fixes for you? Reply to this email to upgrade to our $797/month Done-For-You Retainer and let me handle everything.",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = Color(0xFFF3E8FF)
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            onCopySnippet(
+                                "Need me to implement these fixes for you? Reply to this email to upgrade to our $797/month Done-For-You Retainer and let me handle everything.",
+                                "Done-For-You Upsell Pitch"
+                            )
+                        },
+                        modifier = Modifier
+                            .align(Alignment.End)
+                            .testTag("copy_upsell_pitch_button"),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color(0xFFA855F7))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Copy Retainer Pitch", color = Color(0xFFA855F7))
                     }
                 }
             }

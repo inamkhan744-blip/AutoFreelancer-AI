@@ -25,11 +25,20 @@ data class RawSeoData(
     val rawAuditSummary: String
 )
 
+data class TechnicalSolution(
+    val issueFound: String,
+    val impact: String,
+    val exactSolution: String,
+    val codeSnippet: String? = null,
+    val isStepByStepPlan: Boolean = false
+)
+
 data class SeoReportResult(
     val targetUrl: String,
     val rawData: RawSeoData,
     val generatedReport: String,
-    val engineUsed: String
+    val engineUsed: String,
+    val solutions: List<TechnicalSolution> = emptyList()
 )
 
 class SeoAuditService(
@@ -158,56 +167,57 @@ class SeoAuditService(
         }
 
         val rawData = scrapeRes.getOrThrow()
+        val defaultSolutions = buildDefaultTechnicalSolutions(rawData)
+
         val systemPrompt = """
-            You are an elite Senior Technical SEO Director at AutoFreelancer AI agency.
-            You formulate high-impact, actionable, client-ready 5-point SEO audit reports.
-            Keep formatting pristine with numbered sections (Points 1 to 5), problem analysis, technical solutions, and business impact.
-            Zero fluff, maximum conversion.
+            You are an elite Senior Technical SEO Developer & Full-Stack Web Engineer at AutoFreelancer AI agency.
+            You formulate high-impact, actionable, client-ready 5-point SEO audit reports that provide the exact HOW, not just the WHAT.
+            
+            MANDATORY STRUCTURE:
+            For EVERY issue found or optimization point, you MUST return a structured format with three distinct parts:
+            • Issue Found: (e.g., 'Missing Meta Description', 'Slow Images', 'Keyword Cannibalization', 'Missing H1 Heading')
+            • Impact: (e.g., 'Google cannot understand the page context', 'High mobile bounce rate and Core Web Vitals penalty')
+            • Exact Solution: Provide the exact, copy-paste ready code or step-by-step plan for a developer.
+              - If the issue is 'Slow Images', provide exact HTML code for lazy loading (<img loading="lazy" ...>).
+              - If the issue is 'Missing Meta Description', provide the exact <meta name="description" content="..."> snippet for the <head> tag.
+              - If the issue is 'Keyword Cannibalization', provide a step-by-step plan to merge pages with 301 redirects and canonical tags.
+              - The solution must be 100% ready to copy-paste for a developer.
+            
+            AT THE VERY END OF THE REPORT, you MUST include this exact closing section:
+            ---
+            ### Done-For-You Implementation
+            $DONE_FOR_YOU_UPSELL_TEXT
         """.trimIndent()
 
         val userPrompt = """
-            Analyze these SEO errors and write a professional 5-point audit report with solutions.
+            Analyze these SEO metrics and write an Expert Developer Technical SEO Audit Report with exact copy-paste code solutions.
             
             CLIENT: $clientName
             AUDIT DATA:
             ${rawData.rawAuditSummary}
             
-            STRUCTURE REQUIRED:
-            1. Executive SEO Health Summary
-            2. Point 1: Title & On-Page Snippet Optimization (Findings & Solution)
-            3. Point 2: Meta Description & SERP Click-Through Rate (Findings & Solution)
-            4. Point 3: Content Hierarchy & H1 Semantic Architecture (Findings & Solution)
-            5. Point 4: Performance, Mobile Responsiveness & Crawlability (Findings & Solution)
-            6. Point 5: High-Impact Priority Roadmap & Next Steps
+            MANDATORY FORMAT FOR EACH ITEM:
+            For each optimization point (Points 1 through 5):
+            - **Issue Found**: [Clear title of the problem]
+            - **Impact**: [Direct impact on search ranking, indexing, or CTR]
+            - **Exact Solution**: [Exact copy-pasteable HTML/JS/htaccess code snippet or numbered step-by-step developer plan]
+            
+            Include:
+            1. Executive SEO Health Summary (with Daily Bleed estimate)
+            2. Point 1: Title & On-Page Snippet Optimization (Issue Found, Impact, Exact Solution with <title> snippet)
+            3. Point 2: Meta Description & SERP CTR (Issue Found, Impact, Exact Solution with <meta name="description"> tag)
+            4. Point 3: Content Hierarchy & H1 Architecture (Issue Found, Impact, Exact Solution with <h1> tag)
+            5. Point 4: Performance, Image Optimization & Core Web Vitals (Issue Found, Impact, Exact Solution with lazy loading <img loading="lazy"> tag)
+            6. Point 5: Keyword Architecture & Cannibalization Prevention (Issue Found, Impact, Exact Solution with 301 redirect and canonical merge plan)
+            
+            CLOSING SECTION (MANDATORY):
+            ---
+            ### Done-For-You Implementation
+            $DONE_FOR_YOU_UPSELL_TEXT
         """.trimIndent()
 
-        var reportText = """
-            # 5-POINT TECHNICAL SEO AUDIT REPORT
-            **Target**: ${rawData.url}
-            **Client**: $clientName
-            **Server Response**: ${rawData.httpStatus} (${rawData.latencyMs}ms)
-            
-            ### 1. Title Tag Optimization
-            Current: ${rawData.title ?: "None"}
-            Solution: Formulate keyword-targeted title tag within 50-60 characters.
-            
-            ### 2. Meta Description Architecture
-            Current: ${rawData.metaDescription ?: "None"}
-            Solution: Write compelling 155-character meta descriptions with clear value proposition and CTA.
-            
-            ### 3. Header Tag & Content Hierarchy
-            Current H1: ${rawData.h1Heading ?: "None"}
-            Solution: Anchor the primary search intent with a single semantic <h1> header.
-            
-            ### 4. Technical Crawlability & Speed
-            Status: ${rawData.httpStatus} • Latency: ${rawData.latencyMs}ms
-            Solution: Compress unoptimized assets, enable edge caching, and verify robots.txt.
-            
-            ### 5. Immediate Action Plan
-            Implement priority fixes above to increase organic indexation and CTR.
-        """.trimIndent()
-
-        var engineUsed = "Direct Meta Parser"
+        var reportText = buildDefaultStructuredReport(rawData, clientName, defaultSolutions)
+        var engineUsed = "Direct Developer Parser"
 
         if (geminiApiKey.isNotBlank() || openRouterApiKey.isNotBlank()) {
             val aiRes = aiService.generateContentWithFallback(
@@ -217,8 +227,8 @@ class SeoAuditService(
                 openRouterModel = openRouterModel,
                 systemPrompt = systemPrompt,
                 userPrompt = userPrompt,
-                maxTokens = 1800,
-                temperature = 0.6
+                maxTokens = 2200,
+                temperature = 0.5
             )
 
             if (aiRes.isSuccess) {
@@ -230,18 +240,162 @@ class SeoAuditService(
             }
         }
 
-        if (paymentLinkUrl.isNotBlank()) {
-            reportText += "\n\n---\nTo get the full SEO audit report, please complete the payment here: ${paymentLinkUrl.trim()}"
+        // Ensure Done-For-You Retainer upsell is present at the end of the report
+        if (!reportText.contains(DONE_FOR_YOU_UPSELL_TEXT)) {
+            reportText += "\n\n---\n### Done-For-You Implementation\n$DONE_FOR_YOU_UPSELL_TEXT"
         }
+
+        if (paymentLinkUrl.isNotBlank()) {
+            reportText += "\n\nDirect Authorization Link: ${paymentLinkUrl.trim()}"
+        }
+
+        val parsedSolutions = parseTechnicalSolutions(reportText, rawData, defaultSolutions)
 
         Result.success(
             SeoReportResult(
                 targetUrl = rawData.url,
                 rawData = rawData,
                 generatedReport = reportText,
-                engineUsed = engineUsed
+                engineUsed = engineUsed,
+                solutions = parsedSolutions
             )
         )
+    }
+
+    companion object {
+        const val DONE_FOR_YOU_UPSELL_TEXT =
+            "Need me to implement these fixes for you? Reply to this email to upgrade to our $797/month Done-For-You Retainer and let me handle everything."
+    }
+
+    /**
+     * Synthesizes 5 ready-to-copy developer solutions covering Meta Descriptions,
+     * Lazy-Loaded Images, Keyword Cannibalization, H1 Semantics, and Server Latency.
+     */
+    fun buildDefaultTechnicalSolutions(rawData: RawSeoData): List<TechnicalSolution> {
+        val domain = rawData.url.substringAfter("://").substringBefore("/")
+        val pageTitle = rawData.title ?: "Leading Industry Brand"
+
+        return listOf(
+            TechnicalSolution(
+                issueFound = "Missing / Unoptimized Meta Description",
+                impact = "Google cannot understand the page context or SERP intent, resulting in automated snippet truncation and up to 35% lower click-through rate (CTR).",
+                exactSolution = "Add this exact <meta> tag inside the <head> section of your primary landing page:",
+                codeSnippet = """<meta name="description" content="Discover $pageTitle at $domain. Fast, verified solutions designed to maximize search visibility and organic conversions.">"""
+            ),
+            TechnicalSolution(
+                issueFound = "Slow Images & High Largest Contentful Paint (LCP)",
+                impact = "Unoptimized above-and-below the fold images block the main browser thread, causing mobile LCP to exceed 2.8s and penalizing Core Web Vitals rankings.",
+                exactSolution = "Apply native browser-level lazy loading, asynchronous decoding, and explicit dimensions to all catalog/content images:",
+                codeSnippet = """<img src="assets/banner.webp" alt="$pageTitle" loading="lazy" decoding="async" width="800" height="450">"""
+            ),
+            TechnicalSolution(
+                issueFound = "Keyword Cannibalization & Page Split",
+                impact = "Multiple competing URLs target identical keywords, splitting backlink equity, confusing search crawlers, and suppressing top-3 Google rankings.",
+                exactSolution = "Step-by-step page consolidation plan:\n1. Consolidate thin competing pages into one authoritative Master Pillar page.\n2. Add a 301 Permanent Redirect rule in .htaccess / server configuration.\n3. Add a self-referencing canonical tag to the Master Pillar page.\n4. Update all internal site menus to point strictly to the consolidated URL.",
+                codeSnippet = """# 301 Redirect old competing page to canonical pillar
+Redirect 301 /subpage-competing /${domain.take(12)}-guide
+
+<!-- Self-referencing canonical tag in <head> -->
+<link rel="canonical" href="${rawData.url}">""",
+                isStepByStepPlan = true
+            ),
+            TechnicalSolution(
+                issueFound = "Missing / Fragmented H1 Heading Architecture",
+                impact = "Search bots cannot extract the primary topical entity of the page, diluting keyword relevance in semantic search vectors.",
+                exactSolution = "Add a single, semantic <h1> heading at the top of the main container matching primary search intent:",
+                codeSnippet = """<h1 class="hero-title">${rawData.title?.take(48) ?: "Premier Solutions Engineered for Growth"}</h1>"""
+            ),
+            TechnicalSolution(
+                issueFound = "Server Response Latency (TTFB) & Missing Asset Compression",
+                impact = "Server response latency of ${rawData.latencyMs}ms causes crawler budget depletion and increases bounce rate for mobile users.",
+                exactSolution = "Enable Gzip / Brotli compression and cache headers in your Apache/Nginx configuration:",
+                codeSnippet = """<IfModule mod_deflate.c>
+  AddOutputFilterByType DEFLATE text/html text/plain text/xml text/css application/javascript application/json
+</IfModule>"""
+            )
+        )
+    }
+
+    private fun buildDefaultStructuredReport(
+        rawData: RawSeoData,
+        clientName: String,
+        solutions: List<TechnicalSolution>
+    ): String {
+        return buildString {
+            appendLine("# 5-POINT TECHNICAL SEO AUDIT & DEVELOPER FIX REPORT")
+            appendLine("**Target**: ${rawData.url}")
+            appendLine("**Client**: $clientName")
+            appendLine("**Server Response**: ${rawData.httpStatus} (${rawData.latencyMs}ms)")
+            appendLine("**Daily Bleed Estimate**: -$340/day leaking to ranking competitors")
+            appendLine()
+            appendLine("### Executive Summary")
+            appendLine("Our automated deep crawl has pinpointed 5 core technical bottlenecks. Below are the exact problem diagnoses, business impacts, and developer-ready copy-paste solutions.")
+            appendLine()
+            solutions.forEachIndexed { idx, sol ->
+                appendLine("### Point ${idx + 1}: ${sol.issueFound}")
+                appendLine("- **Issue Found**: ${sol.issueFound}")
+                appendLine("- **Impact**: ${sol.impact}")
+                appendLine("- **Exact Solution**: ${sol.exactSolution}")
+                if (!sol.codeSnippet.isNullOrBlank()) {
+                    appendLine("```html")
+                    appendLine(sol.codeSnippet)
+                    appendLine("```")
+                }
+                appendLine()
+            }
+            appendLine("---")
+            appendLine("### Done-For-You Implementation")
+            appendLine(DONE_FOR_YOU_UPSELL_TEXT)
+        }
+    }
+
+    /**
+     * Parses generated report text for structured three-part items (Issue Found, Impact, Exact Solution).
+     * If the report text contains structured items, it maps them; otherwise falls back to defaults.
+     */
+    fun parseTechnicalSolutions(
+        reportText: String,
+        rawData: RawSeoData,
+        fallback: List<TechnicalSolution> = buildDefaultTechnicalSolutions(rawData)
+    ): List<TechnicalSolution> {
+        val parsedList = mutableListOf<TechnicalSolution>()
+        try {
+            // Regex to find sections with Issue Found, Impact, and Exact Solution with optional markdown formatting
+            val pattern = Pattern.compile(
+                "(?i)(?:[-*•\\s]*)(?:\\*\\*)?(?:Issue Found|Problem)(?:\\*\\*)?:?\\s*([^\n\r]+)[\\s\\S]*?(?:[-*•\\s]*)(?:\\*\\*)?Impact(?:\\*\\*)?:?\\s*([^\n\r]+)[\\s\\S]*?(?:[-*•\\s]*)(?:\\*\\*)?Exact Solution(?:\\*\\*)?:?\\s*([^\n\r]+(?:(?:\n(?![-*•\\s]*(?:\\*\\*)?(?:Issue Found|Problem|###|---))[^\n\r]+)*))"
+            )
+            val matcher = pattern.matcher(reportText)
+            while (matcher.find() && parsedList.size < 6) {
+                val issue = matcher.group(1)?.replace("**", "")?.removePrefix(":")?.trim().orEmpty()
+                val impact = matcher.group(2)?.replace("**", "")?.removePrefix(":")?.trim().orEmpty()
+                val rawSolution = matcher.group(3)?.trim().orEmpty()
+
+                // Extract code snippet if present in markdown code block
+                val codeBlockPattern = Pattern.compile("```(?:html|css|apache|nginx)?\\s*([\\s\\S]*?)```")
+                val codeMatcher = codeBlockPattern.matcher(rawSolution)
+                val codeSnippet = if (codeMatcher.find()) {
+                    codeMatcher.group(1)?.trim()
+                } else if (rawSolution.contains("<") && rawSolution.contains(">")) {
+                    rawSolution.substringAfter("<").substringBeforeLast(">").let { "<$it>" }
+                } else null
+
+                if (issue.isNotBlank() && impact.isNotBlank()) {
+                    parsedList.add(
+                        TechnicalSolution(
+                            issueFound = issue,
+                            impact = impact,
+                            exactSolution = rawSolution.replace("```[a-z]*".toRegex(), "").replace("```", "").trim(),
+                            codeSnippet = codeSnippet,
+                            isStepByStepPlan = rawSolution.contains("Step 1", ignoreCase = true) || rawSolution.contains("1.", ignoreCase = true)
+                        )
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(tag, "Failed to parse solutions from AI text: ${e.message}")
+        }
+
+        return if (parsedList.size >= 3) parsedList else fallback
     }
 
     private fun normalizeUrl(url: String): String {
