@@ -58,7 +58,7 @@ class GeminiPitchService {
         freelancerSpecialty: String = "Technical SEO & Conversion Rate Optimization",
         customInstructions: String = "",
         outreachTone: OutreachTone = OutreachTone.PROFESSIONAL,
-        dynamicPrice: Int = DynamicPricingEngine.SMALL_BUSINESS_PRICE
+        dynamicPrice: Int = DynamicPricingEngine.TIER_RETAINER_PRICE
     ): Result<GeneratedPitch> = withContext(Dispatchers.IO) {
         val prompt = """
             You are 'Apollo-Scout', an expert autonomous AI freelance business development agent for an elite SEO & Web Growth Agency.
@@ -73,15 +73,20 @@ class GeminiPitchService {
 
             ${CompetitorSpyPrompt.instructionsFor(prospect)}
             Write in a ${outreachTone.promptLabel.lowercase()} tone, chosen from historical email reply-rate data.
-            Quote exactly $$dynamicPrice for the audit. Do not invent a different price.
+            
+            CRITICAL PRICING & DAILY BLEED REQUIREMENTS:
+            - Explicitly highlight their estimated 'Daily Bleed' organic revenue loss (estimated -$120 to -$480/day leaking to aggressive SERP competitors).
+            - Pitch the $$dynamicPrice/mo recovery fee (specifically $797 E-Commerce Growth Retainer) as an immediate positive-ROI investment to halt this cash bleed.
+            - NEVER pitch or mention $50 or cheap $50 quotes under any circumstances.
             
             Write a deeply personalized, high-converting pitch message for this prospect.
             Guidelines:
             1. No robotic corporate fluff. Be authentic, technical, helpful, and empathetic.
             2. Reference their exact situation (e.g. core update traffic drops, migrations, Shopify redirects, or indexation).
-            3. Provide 2-3 value-first insights without charging anything upfront.
-            4. Propose a zero-friction CTA: e.g. "I can record a quick 4-minute video walking through what I found, no strings attached."
-            5. Use the fixed audit quote above consistently in the message and CTA.
+            3. Highlight the calculated Daily Bleed loss to competitors.
+            4. Provide 2-3 value-first insights without charging anything upfront.
+            5. Propose a zero-friction CTA: e.g. "I can record a quick 4-minute video walking through what I found, no strings attached."
+            6. Pitch the $$dynamicPrice recovery package consistently in the message and CTA.
         """.trimIndent()
 
         try {

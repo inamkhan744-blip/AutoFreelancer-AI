@@ -138,6 +138,7 @@ dependencies {
 tasks.withType<Test> {
   failFast = true
   timeout.set(Duration.ofMinutes(2))
+  systemProperty("robolectric.dependency.repo.url", "file:///home/appuser/.m2/repository")
   testLogging {
     events("passed", "failed", "skipped")
   }

@@ -64,6 +64,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -149,6 +150,7 @@ fun SettingsScreen(
     var dailyLeadTarget by remember { mutableStateOf(currentSettings.dailyLeadTarget.toString()) }
     var dailyRevenueTarget by remember { mutableStateOf(currentSettings.dailyRevenueTarget.toString()) }
     var paymentLinkUrl by remember { mutableStateOf(currentSettings.paymentLinkUrl) }
+    var paymentWebhookUrl by remember { mutableStateOf(currentSettings.paymentWebhookUrl) }
     var autoPilotEnabled by remember { mutableStateOf(currentSettings.autoPilotEnabled) }
     var searchQuery by remember { mutableStateOf(currentSettings.searchQuery) }
     var autoRunOnApproval by remember { mutableStateOf(currentSettings.autoRunOnApproval) }
@@ -187,6 +189,7 @@ fun SettingsScreen(
         dailyLeadTarget = currentSettings.dailyLeadTarget.toString()
         dailyRevenueTarget = currentSettings.dailyRevenueTarget.toString()
         paymentLinkUrl = currentSettings.paymentLinkUrl
+        paymentWebhookUrl = currentSettings.paymentWebhookUrl
         autoPilotEnabled = currentSettings.autoPilotEnabled
         searchQuery = currentSettings.searchQuery
         autoRunOnApproval = currentSettings.autoRunOnApproval
@@ -494,7 +497,7 @@ fun SettingsScreen(
                     }
 
                     Text(
-                        text = "The AI selects a $50 starter quote or a $350 corporate quote. Use {amount} in a checkout URL template, or ensure your payment provider honors the amount query parameter added to this link.",
+                        text = "The AI exclusively quotes High-Ticket recovery tiers: $297 Express Audit, $797 E-Commerce Growth Retainer (Default), or $1,497 Enterprise Domination. Use {amount} in your checkout URL template, or ensure your payment provider honors the amount query parameter added to this link.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -521,11 +524,102 @@ fun SettingsScreen(
                             Icon(Icons.Default.CheckCircle, contentDescription = null, tint = CyberSuccess, modifier = Modifier.size(14.dp))
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "Checkout amount is selected per lead: $50 starter or $350 corporate.",
+                                text = "High-ticket pricing active: $797/mo retainer (Default) or $1,497 enterprise.",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = CyberSuccess
                             )
                         }
+                    }
+                }
+            }
+
+            // ==========================================
+            // Payment Webhook (Gumroad / Stripe)
+            // ==========================================
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("payment_webhook_card"),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                ),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF7C3AED).copy(alpha = 0.5f))
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Surface(
+                            shape = CircleShape,
+                            color = Color(0xFF7C3AED).copy(alpha = 0.2f),
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.Payment,
+                                    contentDescription = null,
+                                    tint = Color(0xFFA855F7),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                        Column {
+                            Text(
+                                text = "Payment Webhook URL (Gumroad / Stripe)",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Instant CRM 'WON' Status & Automatic PDF Audit Dispatch",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFFC084FC)
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = "Configured webhook endpoint URL. When a customer completes checkout on Stripe or Gumroad, the inbound event automatically marks the lead as 'WON', adds dollars to collected cash, and triggers branded PDF report generation and email dispatch.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    OutlinedTextField(
+                        value = paymentWebhookUrl,
+                        onValueChange = { paymentWebhookUrl = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("payment_webhook_input"),
+                        label = { Text("Payment Webhook URL") },
+                        placeholder = { Text("https://your-api.com/webhooks/stripe or webhook relay URL") },
+                        singleLine = true
+                    )
+
+                    OutlinedButton(
+                        onClick = {
+                            viewModel.simulateTestPaymentWebhook(
+                                buyerEmail = "paying-client@ecombrand.com",
+                                buyerName = "Sarah Chen (Founder)",
+                                amount = 797.0,
+                                source = "Stripe Checkout"
+                            ) { success, msg ->
+                                scope.launch {
+                                    snackbarHostState.showSnackbar(if (success) "🎉 $msg" else "Webhook error: $msg")
+                                }
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("btn_test_payment_webhook"),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color(0xFFA855F7))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Simulate Inbound Stripe Webhook ($797 Deposit)")
                     }
                 }
             }
@@ -2521,6 +2615,7 @@ fun SettingsScreen(
                         dailyLeadTarget = dailyLeadTarget.toIntOrNull() ?: 5,
                         dailyRevenueTarget = dailyRevenueTarget.toDoubleOrNull() ?: 100.0,
                         paymentLinkUrl = paymentLinkUrl.trim(),
+                        paymentWebhookUrl = paymentWebhookUrl.trim(),
                         autoPilotEnabled = autoPilotEnabled,
                         searchQuery = searchQuery.trim(),
                         autoRunOnApproval = autoRunOnApproval,

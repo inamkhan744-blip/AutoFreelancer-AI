@@ -42,8 +42,13 @@ data class AppSettings(
     val twilioPhoneNumber: String = "",
     // IMAP Inbox Reply Sync
     val imapEmail: String = "",
-    val imapAppPassword: String = ""
+    val imapAppPassword: String = "",
+    // Payment Webhook (Gumroad / Stripe)
+    val paymentWebhookUrl: String = ""
 ) {
+    val isPaymentWebhookConfigured: Boolean
+        get() = paymentWebhookUrl.isNotBlank()
+
     val isGeminiConfigured: Boolean
         get() = geminiApiKey.isNotBlank()
 
@@ -152,7 +157,8 @@ class SettingsRepository(
             twilioAuthToken = preferences.getString("twilio_auth_token", "").orEmpty(),
             twilioPhoneNumber = preferences.getString("twilio_phone_number", "").orEmpty(),
             imapEmail = preferences.getString("imap_email", "").orEmpty(),
-            imapAppPassword = preferences.getString("imap_app_password", "").orEmpty()
+            imapAppPassword = preferences.getString("imap_app_password", "").orEmpty(),
+            paymentWebhookUrl = preferences.getString("payment_webhook_url", "").orEmpty()
         )
     }
 
@@ -204,7 +210,8 @@ class SettingsRepository(
                     twilioAuthToken = document.getString("twilio_auth_token") ?: current.twilioAuthToken,
                     twilioPhoneNumber = document.getString("twilio_phone_number") ?: current.twilioPhoneNumber,
                     imapEmail = cloudImapEmail ?: current.imapEmail,
-                    imapAppPassword = cloudImapPassword ?: current.imapAppPassword
+                    imapAppPassword = cloudImapPassword ?: current.imapAppPassword,
+                    paymentWebhookUrl = document.getString("payment_webhook_url") ?: current.paymentWebhookUrl
                 )
             }
         } catch (e: CancellationException) {
@@ -229,6 +236,7 @@ class SettingsRepository(
             .putLong("daily_revenue_target", java.lang.Double.doubleToLongBits(settings.dailyRevenueTarget))
             .putString("brevo_api_key", settings.brevoApiKey.trim())
             .putString("payment_link_url", settings.paymentLinkUrl.trim())
+            .putString("payment_webhook_url", settings.paymentWebhookUrl.trim())
             .putBoolean("auto_pilot_enabled", settings.autoPilotEnabled)
             .putString("search_query", settings.searchQuery.trim())
             .putBoolean("auto_run_approval", settings.autoRunOnApproval)
@@ -268,6 +276,7 @@ class SettingsRepository(
                             "elevenLabs_api_key" to settings.elevenLabsApiKey.trim(),
                             "brevo_api_key" to settings.brevoApiKey.trim(),
                             "payment_link_url" to settings.paymentLinkUrl.trim(),
+                            "payment_webhook_url" to settings.paymentWebhookUrl.trim(),
                             "booking_link_url" to settings.bookingLinkUrl.trim(),
                             "agency_name" to settings.agencyName.trim(),
                             "agency_logo_url" to settings.agencyLogoUrl.trim(),

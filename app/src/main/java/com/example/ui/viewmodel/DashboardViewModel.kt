@@ -42,6 +42,7 @@ import com.example.data.service.ServiceTier
 import com.example.data.service.QuantumRevenueArbitrageEngine
 import com.example.data.service.RevenueHeistDossier
 import com.example.data.service.SeoReportResult
+import com.example.data.service.PdfReportService
 import com.example.data.service.ImapEmailService
 import com.example.data.service.ReportGeneratorService
 import com.example.data.service.TwilioSmsService
@@ -118,7 +119,8 @@ class DashboardViewModel(
     private val abTestingEngine: AbTestingEngine? = null,
     private val imapService: ImapEmailService = ImapEmailService(),
     private val reportGeneratorService: ReportGeneratorService = ReportGeneratorService(),
-    private val revenueArbitrageEngine: QuantumRevenueArbitrageEngine = QuantumRevenueArbitrageEngine(aiService)
+    private val revenueArbitrageEngine: QuantumRevenueArbitrageEngine = QuantumRevenueArbitrageEngine(aiService),
+    private val pdfReportService: PdfReportService = PdfReportService()
 ) : ViewModel() {
 
     val liveTerminalEntries = LiveWorkerLogStore.entries
@@ -2693,13 +2695,24 @@ class DashboardViewModel(
                     customNote = customNote
                 )
 
+                val domain = client.websiteUrl.ifBlank { client.company.ifBlank { "your-brand.com" } }
+                val pdfAttachment = pdfReportService.generateEmailAttachment(
+                    clientName = client.name,
+                    domain = domain,
+                    agencyName = config.agencyName,
+                    dailyBleedUsd = 340.0,
+                    monthlyBleedUsd = 10200.0,
+                    paymentLink = config.paymentLinkUrl
+                )
+
                 val sentOverEmail = if (config.brevoApiKey.isNotBlank() && client.email.isNotBlank()) {
                     val emailRes = emailService.sendEmail(
                         apiKey = config.brevoApiKey,
                         toEmail = client.email,
                         subject = "Proposal: ${tier.title} for ${client.websiteUrl.ifBlank { client.name }}",
                         bodyText = proposalText,
-                        htmlContent = proposalText.replace("\n", "<br/>")
+                        htmlContent = proposalText.replace("\n", "<br/>"),
+                        attachments = listOf(pdfAttachment)
                     )
                     emailRes.isSuccess
                 } else false
@@ -2776,6 +2789,169 @@ class DashboardViewModel(
                 onComplete(true, "🎉 Payment of $${amount.toInt()} USD recorded for ${client.name}!")
             } catch (e: Exception) {
                 onComplete(false, e.message ?: "Failed to record payment")
+            } finally {
+                _isOperationLoading.value = false
+            }
+        }
+    }
+
+    fun simulateTestPaymentWebhook(
+        buyerEmail: String,
+        buyerName: String,
+        amount: Double,
+        source: String = "Stripe Checkout",
+        onResult: (Boolean, String) -> Unit = { _, _ -> }
+    ) {
+        val stripeMockJson = """
+            {
+              "id": "evt_${UUID.randomUUID().toString().take(12)}",
+              "type": "checkout.session.completed",
+              "data": {
+                "object": {
+                  "id": "cs_${UUID.randomUUID().toString().take(12)}",
+                  "amount_total": ${(amount * 100).toLong()},
+                  "customer_details": {
+                    "email": "$buyerEmail",
+                    "name": "$buyerName"
+                  },
+                  "currency": "usd",
+                  "payment_status": "paid"
+                }
+              }
+            }
+        """.trimIndent()
+        processInboundPaymentWebhook(rawJson = stripeMockJson, sourceHint = source, onResult = onResult)
+    }
+
+    fun processInboundPaymentWebhook(
+        rawJson: String,
+        sourceHint: String = "Stripe",
+        onResult: (Boolean, String) -> Unit = { _, _ -> }
+    ) {
+        viewModelScope.launch {
+            _isOperationLoading.value = true
+            try {
+                val json = JSONObject(rawJson.trim())
+                var buyerEmail = ""
+                var buyerName = ""
+                var amountPaid = 797.0
+                var detectedSource = sourceHint
+
+                if (json.has("type") && json.has("data")) {
+                    val dataObj = json.optJSONObject("data")?.optJSONObject("object")
+                    if (dataObj != null) {
+                        val customerDetails = dataObj.optJSONObject("customer_details")
+                        buyerEmail = customerDetails?.optString("email").orEmpty().ifBlank {
+                            dataObj.optString("customer_email").ifBlank {
+                                dataObj.optString("receipt_email")
+                            }
+                        }
+                        buyerName = customerDetails?.optString("name").orEmpty().ifBlank { "Valued Client" }
+                        val totalCents = dataObj.optLong("amount_total", dataObj.optLong("amount", 79700L))
+                        amountPaid = if (totalCents > 0) totalCents / 100.0 else 797.0
+                        detectedSource = "Stripe (${json.optString("type")})"
+                    }
+                }
+
+                if (buyerEmail.isBlank() && (json.has("buyer_email") || json.has("sale_id") || json.has("order_number"))) {
+                    buyerEmail = json.optString("email", json.optString("buyer_email")).trim()
+                    buyerName = json.optString("full_name", json.optString("name", "Valued Client")).trim()
+                    val priceCents = json.optLong("price", 79700L)
+                    amountPaid = if (priceCents > 0) priceCents / 100.0 else 797.0
+                    detectedSource = "Gumroad"
+                }
+
+                if (buyerEmail.isBlank()) {
+                    buyerEmail = json.optString("email", json.optString("customer_email")).trim()
+                    buyerName = json.optString("name", "Client Partner").trim()
+                    val amt = json.optDouble("amount", 797.0)
+                    amountPaid = if (!amt.isNaN() && amt > 0) amt else 797.0
+                    detectedSource = json.optString("source", sourceHint)
+                }
+
+                if (buyerEmail.isBlank()) {
+                    onResult(false, "Could not extract buyer email from webhook payload.")
+                    return@launch
+                }
+
+                val config = settings.value
+                val currentClients = clientRepository?.observeClients()?.first() ?: emptyList()
+                val existing = currentClients.find {
+                    it.email.equals(buyerEmail, ignoreCase = true) ||
+                        (it.company.isNotBlank() && buyerEmail.contains(it.company, ignoreCase = true))
+                }
+
+                val targetClient = existing?.copy(
+                    pipelineStage = DealPipelineStage.WON,
+                    status = DealPipelineStage.WON,
+                    paymentStatus = "PAID",
+                    proposalPrice = amountPaid,
+                    estimatedValue = amountPaid,
+                    updatedAt = System.currentTimeMillis()
+                ) ?: CrmClient(
+                    name = buyerName.ifBlank { buyerEmail.substringBefore("@") },
+                    email = buyerEmail,
+                    company = buyerEmail.substringAfter("@").substringBefore("."),
+                    pipelineStage = DealPipelineStage.WON,
+                    status = DealPipelineStage.WON,
+                    paymentStatus = "PAID",
+                    proposalPrice = amountPaid,
+                    estimatedValue = amountPaid,
+                    leadSource = "$detectedSource Webhook",
+                    updatedAt = System.currentTimeMillis()
+                )
+
+                clientRepository?.upsertClient(targetClient)
+
+                val domain = targetClient.websiteUrl.ifBlank { targetClient.company.ifBlank { "your-brand.com" } }
+                val pdfAttachment = pdfReportService.generateEmailAttachment(
+                    clientName = targetClient.name,
+                    domain = domain,
+                    agencyName = config.agencyName,
+                    dailyBleedUsd = 340.0,
+                    monthlyBleedUsd = 10200.0,
+                    paymentLink = config.paymentLinkUrl
+                )
+
+                var pdfDispatched = false
+                if (config.brevoApiKey.isNotBlank() && targetClient.email.isNotBlank()) {
+                    val subject = "🎉 Payment Received ($${amountPaid.toInt()}) — Your Executive SEO Audit & Strategy Dossier"
+                    val bodyText = """
+                        Hi ${targetClient.name},
+
+                        Thank you for your payment of $${amountPaid.toInt()} via $detectedSource.
+                        
+                        Your account has been officially activated and marked as Closed Won. We have already initiated the technical crawl and keyword recovery processes for $domain to eliminate the active daily organic traffic bleed.
+
+                        Attached to this email is your full, branded Executive Technical SEO Audit & 30-Day Recovery Dossier (PDF).
+
+                        Our senior engineering team will be in touch with the 48-hour sprint roadmap. If you have any immediate questions, simply reply directly to this email.
+
+                        Welcome to ${config.agencyName}!
+
+                        Best regards,
+                        ${config.agencyName} Team
+                    """.trimIndent()
+
+                    val emailResult = emailService.sendEmail(
+                        apiKey = config.brevoApiKey,
+                        toEmail = targetClient.email,
+                        subject = subject,
+                        bodyText = bodyText,
+                        attachments = listOf(pdfAttachment)
+                    )
+                    pdfDispatched = emailResult.isSuccess
+                }
+
+                LiveWorkerLogStore.record(
+                    "Payment Webhook",
+                    "💰 [WEBHOOK CONFIRMED] Received $${amountPaid.toInt()} USD deposit from ${targetClient.name} (${targetClient.email}) via $detectedSource! Client marked as WON. PDF audit dispatched: $pdfDispatched."
+                )
+
+                val successMsg = "Payment of $${amountPaid.toInt()} confirmed for $buyerEmail via $detectedSource. Client marked as WON and Branded PDF dispatched!"
+                onResult(true, successMsg)
+            } catch (e: Exception) {
+                onResult(false, e.message ?: "Failed to process payment webhook")
             } finally {
                 _isOperationLoading.value = false
             }

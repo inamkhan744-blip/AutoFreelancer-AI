@@ -18,6 +18,7 @@ import com.example.data.service.AiOrchestrationService
 import com.example.data.service.BrevoEmailService
 import com.example.data.service.DynamicPricingEngine
 import com.example.data.service.FollowUpSequenceEngine
+import com.example.data.service.PdfReportService
 import com.example.data.service.SearchProspectService
 import com.example.util.BusinessEmailValidator
 import com.example.util.LiveWorkerLogStore
@@ -379,7 +380,7 @@ class AutoPilotWorker(
             openRouterModel = settings.openRouterModel
         )
         val dynamicPaymentLink = pricingEngine.paymentLinkForAmount(settings.paymentLinkUrl, pricing.amount)
-        LiveWorkerLogStore.record(task.workerName, "> Applying ${outreachTone.promptLabel} tone and $${pricing.amount} quote.")
+        LiveWorkerLogStore.record(task.workerName, "> Applying ${outreachTone.promptLabel} tone & High-Ticket $${pricing.amount}/mo recovery fee (Daily Bleed Halt).")
 
         val assignedVariant = abTestingEngine.selectVariant()
 
@@ -435,21 +436,32 @@ class AutoPilotWorker(
                     "Quick SEO audit notes for ${task.client.ifBlank { "your team" }}"
                 }
 
+                val pdfReportService = PdfReportService()
+                val pdfAttachment = pdfReportService.generateEmailAttachment(
+                    clientName = task.client.ifBlank { "Client Partner" },
+                    domain = targetWebsite.ifBlank { task.title },
+                    agencyName = settings.agencyName,
+                    dailyBleedUsd = 340.0,
+                    monthlyBleedUsd = 10200.0,
+                    paymentLink = dynamicPaymentLink
+                )
+
                 val emailRes = emailService.sendEmail(
                     apiKey = settings.brevoApiKey,
                     toEmail = targetEmail,
                     subject = subjectLine,
                     bodyText = deliverableContent,
-                    htmlContent = htmlContent
+                    htmlContent = htmlContent,
+                    attachments = listOf(pdfAttachment)
                 )
                 if (emailRes.isSuccess) {
                     abTestingEngine.recordSend(assignedVariant)
                     replyRateRepository.recordSentPitch(targetEmail, outreachTone)
-                    LiveWorkerLogStore.record(task.workerName, "> Pitch sent (Variant $assignedVariant); reply-rate event recorded.")
+                    LiveWorkerLogStore.record(task.workerName, "> Pitch & Branded PDF Audit sent (Variant $assignedVariant); reply-rate event recorded.")
                     taskRepo.updateTaskStatus(
                         taskId = task.id,
                         newStatus = "PITCHED",
-                        newLog = "Pitch sent to $targetEmail via Brevo."
+                        newLog = "Pitch & Branded PDF Audit sent to $targetEmail via Brevo."
                     )
                 } else {
                     val errMsg = emailRes.exceptionOrNull()?.message ?: "Unknown Brevo error"

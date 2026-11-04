@@ -521,7 +521,10 @@ class AiOrchestrationService(
             You produce real, high-impact deliverables, client outreach proposals, and technical SEO action plans.
             Always format your response cleanly with clear section headings and actionable recommendations.
             Use a ${outreachTone.promptLabel.lowercase()} outreach tone based on the strongest observed reply rate.
-            ${dynamicPrice?.let { "Use exactly $$it as the audit price; do not generate a different amount." }.orEmpty()}
+            CRITICAL PRICING & DAILY BLEED RULES:
+            - Explicitly compute or cite their estimated 'Daily Bleed' organic revenue loss (estimated -$120 to -$480/day leaking to aggressive SERP competitors).
+            - Position the quote as an immediate positive-ROI recovery investment to stop this active cash loss.
+            - ${dynamicPrice?.let { "Use exactly $$it/month (High-Ticket Recovery Tier) as the fee; NEVER quote low-ticket fees like $50." } ?: "Quote the $797/mo High-Ticket E-Commerce Retainer (or $1,497 Enterprise) to stop the daily bleed. NEVER use $50."}
         """.trimIndent()
 
         val leadsSummary = if (leads.isNotEmpty()) {
@@ -582,10 +585,11 @@ class AiOrchestrationService(
             
             INSTRUCTIONS:
             1. Craft a hyper-personalized, non-spammy outreach message tailored directly to the prospect using the enrichment details above.
-            2. Include 3 specific high-impact audit findings / hypotheses (e.g., Core Web Vitals, indexation bloat, programmatic keyword cannibalization, internal linking).
-            3. ${dynamicPrice?.let { "Quote exactly $$it for the audit." } ?: "Provide an estimated project scope value."}
-            4. Provide a zero-friction Call to Action${if (calendarBookingUrl.isNotBlank()) " inviting them to book a quick 10-minute strategy session at $calendarBookingUrl" else " proposing a 4-minute Loom video audit"}.
-            5. Make it ready to deliver immediately.
+            2. Explicitly highlight the calculated 'Daily Bleed' organic revenue loss (estimated -$120 to -$480/day leaking to their top SERP competitors).
+            3. Include 3 specific high-impact technical audit findings / bottlenecks causing this bleed (e.g., Core Web Vitals LCP latency, unindexed commercial product queries, canonical redirects).
+            4. ${dynamicPrice?.let { "Pitch the $$it recovery fee ($797/mo Growth Retainer or high-ticket tier) as the mathematical solution to stop the bleed. NEVER quote $50." } ?: "Pitch the $797/mo High-Ticket Retainer to halt this bleed."}
+            5. Provide a zero-friction Call to Action${if (calendarBookingUrl.isNotBlank()) " inviting them to book a quick 10-minute strategy session at $calendarBookingUrl" else " proposing a 4-minute Loom video audit"} with a 30-day money-back guarantee.
+            6. Make it ready to deliver immediately.
         """.trimIndent()
 
         val genResult = generateContentWithFallback(
@@ -601,9 +605,9 @@ class AiOrchestrationService(
         return if (genResult.isSuccess && paymentLinkUrl.isNotBlank()) {
             val gen = genResult.getOrThrow()
             val cta = if (dynamicPrice != null) {
-                "\n\nThe ${outreachTone.promptLabel.lowercase()} audit package is $$dynamicPrice. To get the full SEO audit report, complete payment here: ${paymentLinkUrl.trim()}"
+                "\n\nThe ${outreachTone.promptLabel.lowercase()} high-ticket recovery retainer is $$dynamicPrice/mo to halt the daily competitor bleed. To authorize work and reserve your slot: ${paymentLinkUrl.trim()}"
             } else {
-                "\n\nTo get the full SEO audit report, please complete the payment here: ${paymentLinkUrl.trim()}"
+                "\n\nTo lock in the high-ticket recovery retainer and stop the daily bleed, complete payment here: ${paymentLinkUrl.trim()}"
             }
             Result.success(gen.copy(content = gen.content + cta))
         } else {

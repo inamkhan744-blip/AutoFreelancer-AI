@@ -58,6 +58,7 @@ import com.example.ui.theme.CyberPrimary
 import com.example.ui.theme.CyberSecondary
 import com.example.ui.theme.CyberTertiary
 import com.example.ui.viewmodel.DashboardViewModel
+import com.example.worker.FollowUpScheduler
 
 class MainActivity : ComponentActivity() {
     private var isAppReady by mutableStateOf(false)
@@ -69,6 +70,13 @@ class MainActivity : ComponentActivity() {
             enableEdgeToEdge()
         } catch (e: Throwable) {
             Log.w("MainActivity", "EdgeToEdge non-fatal notice: ${e.message}")
+        }
+
+        // Initialize Automated Follow-Up scheduler for PITCHED leads (3-day and 7-day checks)
+        try {
+            FollowUpScheduler.schedule(applicationContext, true)
+        } catch (e: Throwable) {
+            Log.w("MainActivity", "FollowUpScheduler schedule error: ${e.message}")
         }
 
         // PERMANENT FIX: Bypass all Firebase Auth and Login
