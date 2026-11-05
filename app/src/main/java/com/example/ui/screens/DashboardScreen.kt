@@ -151,6 +151,7 @@ fun DashboardScreen(
     val showCreateDialog by viewModel.showCreateTaskDialog.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
     val statusFilter by viewModel.statusFilter.collectAsState()
+    val sortByPriority by viewModel.sortByPriority.collectAsState()
     val isOperationLoading by viewModel.isOperationLoading.collectAsState()
     val isAutoPilotActive by viewModel.isAutoPilotActive.collectAsState()
     val liveTerminalEntries by viewModel.liveTerminalEntries.collectAsState()
@@ -543,7 +544,9 @@ fun DashboardScreen(
                                 onSearchQueryChanged = { viewModel.onSearchQueryChanged(it) },
                                 statusFilter = statusFilter,
                                 onFilterChanged = { viewModel.onStatusFilterChanged(it) },
-                                hotLeadsCount = hotLeadsCount
+                                hotLeadsCount = hotLeadsCount,
+                                sortByPriority = sortByPriority,
+                                onToggleSortByPriority = { viewModel.toggleSortByPriority() }
                             )
                             Spacer(modifier = Modifier.height(12.dp))
                             if (statusFilter == "HOT_LEADS") {
@@ -644,7 +647,9 @@ fun DashboardScreen(
                                 onSearchQueryChanged = { viewModel.onSearchQueryChanged(it) },
                                 statusFilter = statusFilter,
                                 onFilterChanged = { viewModel.onStatusFilterChanged(it) },
-                                hotLeadsCount = hotLeadsCount
+                                hotLeadsCount = hotLeadsCount,
+                                sortByPriority = sortByPriority,
+                                onToggleSortByPriority = { viewModel.toggleSortByPriority() }
                             )
                         }
                         if (statusFilter == "HOT_LEADS") {
@@ -1753,7 +1758,9 @@ fun SearchAndFilterBar(
     onSearchQueryChanged: (String) -> Unit,
     statusFilter: String,
     onFilterChanged: (String) -> Unit,
-    hotLeadsCount: Int = 0
+    hotLeadsCount: Int = 0,
+    sortByPriority: Boolean = true,
+    onToggleSortByPriority: () -> Unit = {}
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedTextField(
@@ -1776,6 +1783,51 @@ fun SearchAndFilterBar(
             singleLine = true,
             shape = RoundedCornerShape(12.dp)
         )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "FILTER & PRIORITY SORT",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold
+                ),
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            // Priority Sort Toggle Button
+            FilterChip(
+                selected = sortByPriority,
+                onClick = onToggleSortByPriority,
+                label = {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.TrendingUp,
+                            contentDescription = null,
+                            modifier = Modifier.size(13.dp),
+                            tint = if (sortByPriority) CyberPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = if (sortByPriority) "Sorted by Priority (High→Low)" else "Sort by Priority: Off",
+                            fontSize = 11.sp,
+                            fontWeight = if (sortByPriority) FontWeight.Bold else FontWeight.Normal
+                        )
+                    }
+                },
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.testTag("toggle_sort_priority_button"),
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = CyberPrimary.copy(alpha = 0.2f),
+                    selectedLabelColor = CyberPrimaryLight
+                )
+            )
+        }
 
         FlowRow(
             modifier = Modifier.fillMaxWidth(),
@@ -2020,7 +2072,13 @@ fun TaskItemCard(
                     }
                 }
 
-                StatusBadge(status = task.status)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    PriorityBadge(priority = task.priority)
+                    StatusBadge(status = task.status)
+                }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -2204,6 +2262,41 @@ fun TaskItemCard(
                     Text("Complete Deliverable", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
+        }
+    }
+}
+
+@Composable
+fun PriorityBadge(priority: String) {
+    val (bgColor, textColor, label) = when (priority.uppercase()) {
+        "HIGH" -> Triple(CyberError.copy(alpha = 0.2f), CyberError, "HIGH")
+        "MEDIUM" -> Triple(CyberWarning.copy(alpha = 0.2f), CyberWarning, "MEDIUM")
+        "LOW" -> Triple(CyberTertiary.copy(alpha = 0.2f), CyberTertiary, "LOW")
+        else -> Triple(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant, priority)
+    }
+
+    Box(
+        modifier = Modifier
+            .background(bgColor, RoundedCornerShape(6.dp))
+            .padding(horizontal = 6.dp, vertical = 2.dp)
+            .testTag("priority_badge_${priority.lowercase()}")
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(3.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(5.dp)
+                    .clip(CircleShape)
+                    .background(textColor)
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                color = textColor,
+                fontSize = 9.sp
+            )
         }
     }
 }
@@ -2718,6 +2811,36 @@ fun CreateTaskDialog(
                             colors = FilterChipDefaults.filterChipColors(
                                 selectedContainerColor = CyberPrimary.copy(alpha = 0.25f),
                                 selectedLabelColor = CyberPrimary
+                            )
+                        )
+                    }
+                }
+
+                Text(
+                    text = "Priority Level:",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf("LOW", "MEDIUM", "HIGH").forEach { p ->
+                        val isSelected = priority.equals(p, ignoreCase = true)
+                        val chipColor = when (p) {
+                            "HIGH" -> CyberError
+                            "MEDIUM" -> CyberWarning
+                            "LOW" -> CyberTertiary
+                            else -> CyberPrimary
+                        }
+                        FilterChip(
+                            selected = isSelected,
+                            onClick = { priority = p },
+                            label = { Text(p.lowercase().replaceFirstChar { it.uppercase() }) },
+                            modifier = Modifier.testTag("priority_chip_${p.lowercase()}"),
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = chipColor.copy(alpha = 0.25f),
+                                selectedLabelColor = chipColor
                             )
                         )
                     }

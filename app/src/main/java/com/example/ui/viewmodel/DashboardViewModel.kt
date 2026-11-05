@@ -164,6 +164,12 @@ class DashboardViewModel(
     private val _statusFilter = MutableStateFlow("ALL") // ALL, PENDING, ACTIVE, COMPLETED, REJECTED, HOT_LEADS
     val statusFilter: StateFlow<String> = _statusFilter.asStateFlow()
 
+    private val _sortByPriority = MutableStateFlow(true)
+    val sortByPriority: StateFlow<Boolean> = _sortByPriority.asStateFlow()
+
+    private val _priorityFilter = MutableStateFlow("ALL") // ALL, HIGH, MEDIUM, LOW
+    val priorityFilter: StateFlow<String> = _priorityFilter.asStateFlow()
+
     private val _activeNotification = MutableStateFlow<WorkerNotification?>(null)
     val activeNotification: StateFlow<WorkerNotification?> = _activeNotification.asStateFlow()
 
@@ -512,6 +518,22 @@ class DashboardViewModel(
                 else -> tasks
             }
         }
+        .combine(_sortByPriority) { tasks, sortActive ->
+            if (sortActive) {
+                tasks.sortedWith(
+                    compareByDescending<Task> { task ->
+                        when (task.priority.uppercase()) {
+                            "HIGH" -> 3
+                            "MEDIUM" -> 2
+                            "LOW" -> 1
+                            else -> 0
+                        }
+                    }.thenByDescending { it.estimatedValue }
+                )
+            } else {
+                tasks
+            }
+        }
         .combine(repository.observeTasks()) { filteredList, _ ->
             TasksUiState.Success(filteredList)
         }
@@ -645,6 +667,18 @@ class DashboardViewModel(
 
     fun onStatusFilterChanged(filter: String) {
         _statusFilter.value = filter
+    }
+
+    fun toggleSortByPriority() {
+        _sortByPriority.value = !_sortByPriority.value
+    }
+
+    fun setSortByPriority(enabled: Boolean) {
+        _sortByPriority.value = enabled
+    }
+
+    fun onPriorityFilterChanged(priority: String) {
+        _priorityFilter.value = priority
     }
 
     fun selectTaskForDetail(task: Task?) {
