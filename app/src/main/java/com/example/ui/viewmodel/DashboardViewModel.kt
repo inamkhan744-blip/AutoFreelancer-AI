@@ -89,7 +89,10 @@ data class WorkerNotification(
     val id: String = UUID.randomUUID().toString(),
     val workerName: String,
     val taskTitle: String,
-    val timestampMs: Long = System.currentTimeMillis()
+    val timestampMs: Long = System.currentTimeMillis(),
+    val isDeadlineAlert: Boolean = false,
+    val timeLeftMessage: String = "",
+    val isOverdue: Boolean = false
 )
 
 data class LeadDiscoveryProgress(
@@ -596,10 +599,84 @@ class DashboardViewModel(
                     if (pendingTasks.isNotEmpty()) {
                         for (task in pendingTasks) {
                             approveTask(task)
-                        }
+                         }
+                     }
+                 }
+             }
+         }
+
+        // Deadline Alert Engine: monitors tasks with due dates and surfaces alerts when deadline is within 24h or overdue
+        viewModelScope.launch {
+            repository.observeTasks().collect { tasks ->
+                checkTaskDeadlines(tasks)
+            }
+        }
+    }
+
+    private val notifiedTaskDeadlines = mutableSetOf<String>()
+
+    fun checkTaskDeadlines(tasks: List<Task>, context: Context? = null) {
+        val now = System.currentTimeMillis()
+        val thresholdWarningMs = 24 * 60 * 60 * 1000L // 24 hours
+
+        // Check active and pending tasks with due dates
+        val activeTasksWithDeadlines = tasks.filter { t ->
+            t.dueDate != null && !t.status.equals("COMPLETED", ignoreCase = true) && !t.status.equals("REJECTED", ignoreCase = true)
+        }
+
+        for (task in activeTasksWithDeadlines) {
+            val due = task.dueDate ?: continue
+            val diff = due - now
+            val isOverdue = diff <= 0
+            val isNearing = diff in 1..thresholdWarningMs
+
+            if (isOverdue || isNearing) {
+                val formattedTimeLeft = formatTimeRemaining(diff)
+                val alertKey = "${task.id}_${if (isOverdue) "overdue" else "nearing"}"
+
+                if (!notifiedTaskDeadlines.contains(alertKey)) {
+                    notifiedTaskDeadlines.add(alertKey)
+
+                    // Post in-app alert banner
+                    _activeNotification.value = WorkerNotification(
+                        workerName = if (task.workerName.isNotBlank()) task.workerName else "Deadline Watchdog",
+                        taskTitle = task.title,
+                        isDeadlineAlert = true,
+                        timeLeftMessage = if (isOverdue) "Overdue by $formattedTimeLeft" else "Due in $formattedTimeLeft",
+                        isOverdue = isOverdue
+                    )
+
+                    LiveWorkerLogStore.record(
+                        "Deadline Alert",
+                        "⏰ [DEADLINE ${if (isOverdue) "OVERDUE" else "APPROACHING"}] '${task.title}' for ${task.client} is ${if (isOverdue) "overdue by" else "due in"} $formattedTimeLeft!"
+                    )
+
+                    // Also dispatch system push notification if context is provided
+                    if (context != null) {
+                        com.example.util.TaskDeadlineNotificationHelper.sendDeadlineAlert(
+                            context = context,
+                            taskId = task.id,
+                            taskTitle = task.title,
+                            clientName = task.client.ifBlank { "Client" },
+                            timeLeftFormatted = formattedTimeLeft,
+                            isOverdue = isOverdue
+                        )
                     }
                 }
             }
+        }
+    }
+
+    private fun formatTimeRemaining(diffMs: Long): String {
+        val absMs = kotlin.math.abs(diffMs)
+        val hours = (absMs / (1000 * 60 * 60)).toInt()
+        val minutes = ((absMs % (1000 * 60 * 60)) / (1000 * 60)).toInt()
+        val days = hours / 24
+
+        return when {
+            days > 0 -> "$days day${if (days > 1) "s" else ""} ${hours % 24}h"
+            hours > 0 -> "$hours hr${if (hours > 1) "s" else ""} $minutes min"
+            else -> "$minutes min${if (minutes > 1) "s" else ""}"
         }
     }
 
@@ -1226,7 +1303,8 @@ class DashboardViewModel(
         estimatedValue: Double,
         details: String,
         priority: String = "MEDIUM",
-        status: String = "PENDING"
+        status: String = "PENDING",
+        dueDate: Long? = null
     ) {
         viewModelScope.launch {
             _isOperationLoading.value = true
@@ -1247,6 +1325,7 @@ class DashboardViewModel(
                 clientEmail = clientEmail.trim(),
                 estimatedValue = estimatedValue.coerceAtLeast(0.0),
                 details = details.ifBlank { "Autonomous freelancing task created by director." },
+                dueDate = dueDate,
                 logs = listOf("Task created with status '$finalStatus'.")
             )
             repository.createTask(newTask)

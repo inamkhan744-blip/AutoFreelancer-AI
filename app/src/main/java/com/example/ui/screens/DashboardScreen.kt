@@ -60,6 +60,8 @@ import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.TrendingUp
+import androidx.compose.material.icons.filled.AccessTime
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Work
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -956,8 +958,8 @@ fun DashboardScreen(
     if (showCreateDialog) {
         CreateTaskDialog(
             onDismiss = { viewModel.closeCreateTaskDialog() },
-            onSubmit = { title, category, worker, role, client, clientEmail, value, details, priority, status ->
-                viewModel.createCustomTask(title, category, worker, role, client, clientEmail, value, details, priority, status)
+            onSubmit = { title, category, worker, role, client, clientEmail, value, details, priority, status, dueDate ->
+                viewModel.createCustomTask(title, category, worker, role, client, clientEmail, value, details, priority, status, dueDate)
             }
         )
     }
@@ -1521,18 +1523,33 @@ fun WorkerNotificationBanner(
     notification: WorkerNotification,
     onDismiss: () -> Unit
 ) {
+    val isDeadline = notification.isDeadlineAlert
+    val isOverdue = notification.isOverdue
+
+    val containerBg = when {
+        isOverdue -> Color(0xFF450A0A) // Deep red
+        isDeadline -> Color(0xFF451A03) // Deep amber/warning
+        else -> Color(0xFF064E3B) // Cyber green
+    }
+
+    val primaryColor = when {
+        isOverdue -> CyberError
+        isDeadline -> CyberWarning
+        else -> CyberTertiary
+    }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp)
-            .testTag("worker_started_notification"),
+            .testTag(if (isDeadline) "task_deadline_notification" else "worker_started_notification"),
         shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = Color(0xFF064E3B)
-        ),
+        colors = CardDefaults.cardColors(containerColor = containerBg),
         border = CardDefaults.outlinedCardBorder().copy(
             brush = Brush.horizontalGradient(
-                listOf(CyberTertiary, CyberSecondary)
+                if (isOverdue) listOf(CyberError, CyberWarning)
+                else if (isDeadline) listOf(CyberWarning, CyberPrimaryLight)
+                else listOf(CyberTertiary, CyberSecondary)
             )
         )
     ) {
@@ -1546,13 +1563,17 @@ fun WorkerNotificationBanner(
                 modifier = Modifier
                     .size(40.dp)
                     .clip(CircleShape)
-                    .background(CyberTertiary.copy(alpha = 0.25f)),
+                    .background(primaryColor.copy(alpha = 0.25f)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    imageVector = Icons.Default.RocketLaunch,
+                    imageVector = when {
+                        isOverdue -> Icons.Default.Warning
+                        isDeadline -> Icons.Default.HourglassEmpty
+                        else -> Icons.Default.RocketLaunch
+                    },
                     contentDescription = null,
-                    tint = CyberTertiary,
+                    tint = primaryColor,
                     modifier = Modifier.size(24.dp)
                 )
             }
@@ -1560,18 +1581,26 @@ fun WorkerNotificationBanner(
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = "AI Worker Dispatched",
+                        text = when {
+                            isOverdue -> "Task Overdue Alert"
+                            isDeadline -> "Task Deadline Approaching"
+                            else -> "AI Worker Dispatched"
+                        },
                         style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                         color = Color.White
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Box(
                         modifier = Modifier
-                            .background(CyberTertiary, RoundedCornerShape(4.dp))
+                            .background(primaryColor, RoundedCornerShape(4.dp))
                             .padding(horizontal = 6.dp, vertical = 2.dp)
                     ) {
                         Text(
-                            text = "LIVE",
+                            text = when {
+                                isOverdue -> "OVERDUE"
+                                isDeadline -> "DEADLINE"
+                                else -> "LIVE"
+                            },
                             style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                             color = Color.Black,
                             fontSize = 10.sp
@@ -1580,9 +1609,13 @@ fun WorkerNotificationBanner(
                 }
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    text = "${notification.workerName} is now executing '${notification.taskTitle}'",
+                    text = if (isDeadline) {
+                        "'${notification.taskTitle}' is ${notification.timeLeftMessage}! Action needed to meet client delivery deadline."
+                    } else {
+                        "${notification.workerName} is now executing '${notification.taskTitle}'"
+                    },
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFFD1FAE5),
+                    color = if (isOverdue) Color(0xFFFECACA) else if (isDeadline) Color(0xFFFEF3C7) else Color(0xFFD1FAE5),
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -2129,11 +2162,54 @@ fun TaskItemCard(
                     )
                 }
 
-                Text(
-                    text = "$${task.estimatedValue.toInt()}",
-                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                    color = CyberTertiary
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (task.dueDate != null && task.dueDate > 0) {
+                        val now = System.currentTimeMillis()
+                        val diff = task.dueDate - now
+                        val isOverdue = diff <= 0
+                        val isUrgent = diff in 1..(24 * 60 * 60 * 1000L)
+                        val dueDateColor = when {
+                            isOverdue -> CyberError
+                            isUrgent -> CyberWarning
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        }
+                        val timeStr = formatDeadlineBadge(task.dueDate)
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = dueDateColor.copy(alpha = 0.15f),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, dueDateColor.copy(alpha = 0.5f)),
+                            modifier = Modifier.testTag("task_due_date_badge_${task.id}")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(3.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (isOverdue) Icons.Default.Warning else Icons.Default.AccessTime,
+                                    contentDescription = null,
+                                    tint = dueDateColor,
+                                    modifier = Modifier.size(11.dp)
+                                )
+                                Text(
+                                    text = timeStr,
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = dueDateColor,
+                                    fontSize = 10.sp
+                                )
+                            }
+                        }
+                    }
+
+                    Text(
+                        text = "$${task.estimatedValue.toInt()}",
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                        color = CyberTertiary
+                    )
+                }
             }
 
             if (task.status == "RUNNING" || task.status == "APPROVED") {
@@ -2263,6 +2339,23 @@ fun TaskItemCard(
                 }
             }
         }
+    }
+}
+
+fun formatDeadlineBadge(dueDateMs: Long): String {
+    val now = System.currentTimeMillis()
+    val diff = dueDateMs - now
+    val absMs = kotlin.math.abs(diff)
+    val hours = (absMs / (1000 * 60 * 60)).toInt()
+    val days = hours / 24
+
+    return when {
+        diff <= 0 -> {
+            if (days > 0) "Overdue by ${days}d" else "Overdue by ${hours}h"
+        }
+        days > 0 -> "Due in ${days}d"
+        hours > 0 -> "Due in ${hours}h"
+        else -> "Due in <1h"
     }
 }
 
@@ -2430,6 +2523,13 @@ fun TaskDetailPane(
                         Text("Estimated Value", style = MaterialTheme.typography.labelSmall)
                         Text("$${task.estimatedValue.toInt()}", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold), color = CyberTertiary)
                         Text("Priority: ${task.priority}", style = MaterialTheme.typography.bodySmall)
+                        if (task.dueDate != null && task.dueDate > 0) {
+                            Text(
+                                text = "Due: ${formatDeadlineBadge(task.dueDate)}",
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                color = if (task.dueDate <= System.currentTimeMillis()) CyberError else CyberWarning
+                            )
+                        }
                     }
                 }
             }
@@ -2699,7 +2799,8 @@ fun CreateTaskDialog(
         value: Double,
         details: String,
         priority: String,
-        status: String
+        status: String,
+        dueDate: Long?
     ) -> Unit
 ) {
     var title by remember { mutableStateOf("") }
@@ -2712,6 +2813,7 @@ fun CreateTaskDialog(
     var details by remember { mutableStateOf("") }
     var priority by remember { mutableStateOf("HIGH") }
     var taskStatus by remember { mutableStateOf("pending") }
+    var dueDaysOffset by remember { mutableStateOf(3) } // 1 day, 3 days, 7 days, 14 days, no deadline
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -2846,6 +2948,35 @@ fun CreateTaskDialog(
                     }
                 }
 
+                Text(
+                    text = "Deadline / Due Date:",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf(
+                        1 to "24 Hours",
+                        3 to "3 Days",
+                        7 to "7 Days",
+                        14 to "14 Days"
+                    ).forEach { (days, label) ->
+                        val isSelected = dueDaysOffset == days
+                        FilterChip(
+                            selected = isSelected,
+                            onClick = { dueDaysOffset = days },
+                            label = { Text(label, fontSize = 11.sp) },
+                            modifier = Modifier.testTag("due_date_chip_${days}d"),
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = CyberTertiary.copy(alpha = 0.25f),
+                                selectedLabelColor = CyberTertiary
+                            )
+                        )
+                    }
+                }
+
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
                         value = workerName,
@@ -2878,7 +3009,10 @@ fun CreateTaskDialog(
                 onClick = {
                     if (title.isNotBlank()) {
                         val value = estimatedValueStr.toDoubleOrNull() ?: 797.0
-                        onSubmit(title, category, workerName, workerRole, client, clientEmail, value, details, priority, taskStatus)
+                        val computedDueDate = if (dueDaysOffset > 0) {
+                            System.currentTimeMillis() + (dueDaysOffset * 24L * 60L * 60L * 1000L)
+                        } else null
+                        onSubmit(title, category, workerName, workerRole, client, clientEmail, value, details, priority, taskStatus, computedDueDate)
                     }
                 },
                 modifier = Modifier.testTag("submit_create_task_button"),

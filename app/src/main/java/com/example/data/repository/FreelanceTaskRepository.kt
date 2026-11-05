@@ -51,7 +51,8 @@ class FreelanceTaskRepository(
         client: String = "",
         clientEmail: String = "",
         estimatedValue: Double = 797.0,
-        priority: String = "MEDIUM"
+        priority: String = "MEDIUM",
+        dueDate: Long? = null
     ): String = withContext(Dispatchers.IO) {
         val normalizedStatus = when (status.lowercase().trim()) {
             "in-progress", "inprogress", "running", "in_progress" -> "in-progress"
@@ -68,6 +69,7 @@ class FreelanceTaskRepository(
             clientEmail = clientEmail,
             estimatedValue = estimatedValue,
             priority = priority,
+            dueDate = dueDate,
             createdAt = System.currentTimeMillis(),
             updatedAt = System.currentTimeMillis()
         )

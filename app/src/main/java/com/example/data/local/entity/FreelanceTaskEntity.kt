@@ -20,6 +20,7 @@ data class FreelanceTaskEntity(
     val priority: String = "MEDIUM", // HIGH, MEDIUM, LOW
     val category: String = "SEO & Growth",
     val workerRole: String = "Senior SEO Engineer",
+    val dueDate: Long? = null, // Epoch timestamp in ms when task is due
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )

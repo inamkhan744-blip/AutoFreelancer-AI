@@ -23,6 +23,7 @@ data class Task(
     val details: String = "",
     val rejectionReason: String? = null,
     val logs: List<String> = emptyList(),
+    val dueDate: Long? = null, // Epoch ms deadline for task completion
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
@@ -40,6 +41,7 @@ data class Task(
             "details" to details,
             "rejectionReason" to rejectionReason,
             "logs" to logs,
+            "dueDate" to dueDate,
             "createdAt" to createdAt,
             "updatedAt" to updatedAt
         ).filterValues { it != null }
@@ -58,6 +60,7 @@ data class Task(
         json.put("clientEmail", clientEmail)
         json.put("estimatedValue", estimatedValue)
         json.put("details", details)
+        if (dueDate != null) json.put("dueDate", dueDate)
         if (rejectionReason != null) json.put("rejectionReason", rejectionReason)
         val logsArr = JSONArray()
         logs.forEach { logsArr.put(it) }
@@ -81,6 +84,8 @@ data class Task(
             val createdSec = json.optLong("createdAtSeconds", System.currentTimeMillis() / 1000)
             val updatedSec = json.optLong("updatedAtSeconds", System.currentTimeMillis() / 1000)
 
+            val dueDateVal = if (json.has("dueDate")) json.optLong("dueDate") else null
+
             return Task(
                 id = json.optString("id", ""),
                 title = json.optString("title", ""),
@@ -95,6 +100,7 @@ data class Task(
                 details = json.optString("details", ""),
                 rejectionReason = if (json.has("rejectionReason")) json.optString("rejectionReason") else null,
                 logs = logs,
+                dueDate = if (dueDateVal != null && dueDateVal > 0) dueDateVal else null,
                 createdAt = Timestamp(Date(createdSec * 1000)),
                 updatedAt = Timestamp(Date(updatedSec * 1000))
             )

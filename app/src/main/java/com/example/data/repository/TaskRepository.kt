@@ -92,6 +92,7 @@ class TaskRepository(
                         priority = t.priority,
                         category = t.category,
                         workerRole = t.workerRole,
+                        dueDate = t.dueDate,
                         createdAt = t.createdAt?.toDate()?.time ?: System.currentTimeMillis(),
                         updatedAt = t.updatedAt?.toDate()?.time ?: System.currentTimeMillis()
                     )
