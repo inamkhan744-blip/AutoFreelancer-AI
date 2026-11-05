@@ -497,11 +497,17 @@ class DashboardViewModel(
             }
         }
         .combine(_statusFilter) { tasks, filter ->
-            when (filter) {
-                "PENDING" -> tasks.filter { it.status == "PENDING" }
-                "ACTIVE" -> tasks.filter { it.status == "APPROVED" || it.status == "RUNNING" }
-                "COMPLETED" -> tasks.filter { it.status == "COMPLETED" }
-                "REJECTED" -> tasks.filter { it.status == "REJECTED" }
+            when (filter.uppercase()) {
+                "PENDING" -> tasks.filter { it.status.equals("PENDING", ignoreCase = true) }
+                "IN-PROGRESS", "IN_PROGRESS", "ACTIVE" -> tasks.filter {
+                    it.status.equals("IN-PROGRESS", ignoreCase = true) ||
+                    it.status.equals("IN_PROGRESS", ignoreCase = true) ||
+                    it.status.equals("ACTIVE", ignoreCase = true) ||
+                    it.status.equals("APPROVED", ignoreCase = true) ||
+                    it.status.equals("RUNNING", ignoreCase = true)
+                }
+                "COMPLETED" -> tasks.filter { it.status.equals("COMPLETED", ignoreCase = true) }
+                "REJECTED" -> tasks.filter { it.status.equals("REJECTED", ignoreCase = true) }
                 "HOT_LEADS" -> emptyList()
                 else -> tasks
             }
@@ -517,10 +523,16 @@ class DashboardViewModel(
 
     val metrics: StateFlow<DashboardMetrics> = repository.observeTasks()
         .combine(_searchQuery) { tasks, _ ->
-            val pending = tasks.count { it.status == "PENDING" }
-            val active = tasks.count { it.status == "APPROVED" || it.status == "RUNNING" }
-            val completed = tasks.count { it.status == "COMPLETED" }
-            val totalValue = tasks.filter { it.status != "REJECTED" }.sumOf { it.estimatedValue }
+            val pending = tasks.count { it.status.equals("PENDING", ignoreCase = true) }
+            val active = tasks.count {
+                it.status.equals("IN-PROGRESS", ignoreCase = true) ||
+                it.status.equals("IN_PROGRESS", ignoreCase = true) ||
+                it.status.equals("ACTIVE", ignoreCase = true) ||
+                it.status.equals("APPROVED", ignoreCase = true) ||
+                it.status.equals("RUNNING", ignoreCase = true)
+            }
+            val completed = tasks.count { it.status.equals("COMPLETED", ignoreCase = true) }
+            val totalValue = tasks.filter { !it.status.equals("REJECTED", ignoreCase = true) }.sumOf { it.estimatedValue }
             DashboardMetrics(
                 totalTasks = tasks.size,
                 pendingCount = pending,
@@ -1179,22 +1191,29 @@ class DashboardViewModel(
         clientEmail: String = "",
         estimatedValue: Double,
         details: String,
-        priority: String = "MEDIUM"
+        priority: String = "MEDIUM",
+        status: String = "PENDING"
     ) {
         viewModelScope.launch {
             _isOperationLoading.value = true
+            val finalStatus = when (status.lowercase()) {
+                "in-progress", "in_progress", "active", "approved" -> "IN-PROGRESS"
+                "completed" -> "COMPLETED"
+                "rejected" -> "REJECTED"
+                else -> "PENDING"
+            }
             val newTask = Task(
                 title = title.ifBlank { "Client Task" },
                 category = category.ifBlank { "Client Acquisition" },
                 workerName = workerName.ifBlank { "AutoWorker-AI" },
                 workerRole = workerRole.ifBlank { "Freelance AI Specialist" },
-                status = "PENDING",
+                status = finalStatus,
                 priority = priority,
                 client = client.ifBlank { "Client Prospect" },
                 clientEmail = clientEmail.trim(),
                 estimatedValue = estimatedValue.coerceAtLeast(0.0),
                 details = details.ifBlank { "Autonomous freelancing task created by director." },
-                logs = listOf("Task queued by director in pending review state.")
+                logs = listOf("Task created with status '$finalStatus'.")
             )
             repository.createTask(newTask)
             _isOperationLoading.value = false

@@ -951,8 +951,8 @@ fun DashboardScreen(
     if (showCreateDialog) {
         CreateTaskDialog(
             onDismiss = { viewModel.closeCreateTaskDialog() },
-            onSubmit = { title, category, worker, role, client, clientEmail, value, details, priority ->
-                viewModel.createCustomTask(title, category, worker, role, client, clientEmail, value, details, priority)
+            onSubmit = { title, category, worker, role, client, clientEmail, value, details, priority, status ->
+                viewModel.createCustomTask(title, category, worker, role, client, clientEmail, value, details, priority, status)
             }
         )
     }
@@ -1600,38 +1600,103 @@ fun WorkerNotificationBanner(
 fun MetricsHeader(metrics: DashboardMetrics) {
     val currencyFormat = remember { NumberFormat.getCurrencyInstance(Locale.US).apply { maximumFractionDigits = 0 } }
 
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        MetricCard(
-            title = "Pending",
-            value = metrics.pendingCount.toString(),
-            icon = Icons.Default.HourglassEmpty,
-            color = CyberWarning,
-            modifier = Modifier.weight(1f)
-        )
-        MetricCard(
-            title = "Active AI",
-            value = metrics.activeWorkersCount.toString(),
-            icon = Icons.Default.RocketLaunch,
-            color = CyberSecondary,
-            modifier = Modifier.weight(1f)
-        )
-        MetricCard(
-            title = "Completed",
-            value = metrics.completedCount.toString(),
-            icon = Icons.Default.CheckCircle,
-            color = CyberTertiary,
-            modifier = Modifier.weight(1f)
-        )
-        MetricCard(
-            title = "Pipeline",
-            value = currencyFormat.format(metrics.totalEstimatedValue),
-            icon = Icons.Default.TrendingUp,
-            color = CyberPrimaryLight,
-            modifier = Modifier.weight(1.3f)
-        )
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            MetricCard(
+                title = "Pending",
+                value = metrics.pendingCount.toString(),
+                icon = Icons.Default.HourglassEmpty,
+                color = CyberWarning,
+                modifier = Modifier.weight(1f)
+            )
+            MetricCard(
+                title = "In-Progress",
+                value = metrics.activeWorkersCount.toString(),
+                icon = Icons.Default.RocketLaunch,
+                color = CyberSecondary,
+                modifier = Modifier.weight(1f)
+            )
+            MetricCard(
+                title = "Completed",
+                value = metrics.completedCount.toString(),
+                icon = Icons.Default.CheckCircle,
+                color = CyberTertiary,
+                modifier = Modifier.weight(1f)
+            )
+            MetricCard(
+                title = "Pipeline",
+                value = currencyFormat.format(metrics.totalEstimatedValue),
+                icon = Icons.Default.TrendingUp,
+                color = CyberPrimaryLight,
+                modifier = Modifier.weight(1.3f)
+            )
+        }
+
+        // Visual Progress Bar: Completed Tasks vs Total Tasks
+        val total = metrics.totalTasks
+        val completed = metrics.completedCount
+        val progressPercent = if (total > 0) ((completed.toFloat() / total.toFloat()) * 100f).toInt() else 0
+        val progressRatio = if (total > 0) (completed.toFloat() / total.toFloat()).coerceIn(0f, 1f) else 0f
+
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("task_completion_progress_card"),
+            shape = RoundedCornerShape(10.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+            ),
+            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = null,
+                            tint = CyberTertiary,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Text(
+                            text = "Task Completion Progress",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                    Text(
+                        text = "$completed of $total Completed ($progressPercent%)",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = CyberTertiary,
+                        modifier = Modifier.testTag("task_completion_percentage_text")
+                    )
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                LinearProgressIndicator(
+                    progress = { progressRatio },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(8.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .testTag("task_completion_progress_bar"),
+                    color = CyberTertiary,
+                    trackColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+            }
+        }
     }
 }
 
@@ -1718,21 +1783,23 @@ fun SearchAndFilterBar(
         ) {
             val filters = listOf(
                 "ALL" to "All Tasks",
-                "HOT_LEADS" to if (hotLeadsCount > 0) "🔥 Hot Leads ($hotLeadsCount)" else "🔥 Hot Leads",
-                "PENDING" to "Pending Approval",
-                "ACTIVE" to "Active Workers",
+                "PENDING" to "Pending",
+                "IN-PROGRESS" to "In-Progress",
                 "COMPLETED" to "Completed",
+                "HOT_LEADS" to if (hotLeadsCount > 0) "🔥 Hot Leads ($hotLeadsCount)" else "🔥 Hot Leads",
                 "REJECTED" to "Rejected"
             )
 
             filters.forEach { (key, label) ->
                 val isHotChip = key == "HOT_LEADS"
+                val isSelected = statusFilter.equals(key, ignoreCase = true) ||
+                    (key == "IN-PROGRESS" && (statusFilter.equals("ACTIVE", ignoreCase = true) || statusFilter.equals("IN_PROGRESS", ignoreCase = true)))
                 FilterChip(
-                    selected = statusFilter == key,
+                    selected = isSelected,
                     onClick = { onFilterChanged(key) },
                     label = { Text(label, fontSize = 12.sp) },
                     shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier.testTag("filter_chip_$key"),
+                    modifier = Modifier.testTag("filter_chip_${key.lowercase().replace("-", "_")}"),
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = if (isHotChip) CyberWarning.copy(alpha = 0.25f) else CyberPrimary.copy(alpha = 0.2f),
                         selectedLabelColor = if (isHotChip) CyberWarning else CyberPrimaryLight
@@ -2538,7 +2605,8 @@ fun CreateTaskDialog(
         clientEmail: String,
         value: Double,
         details: String,
-        priority: String
+        priority: String,
+        status: String
     ) -> Unit
 ) {
     var title by remember { mutableStateOf("") }
@@ -2550,6 +2618,7 @@ fun CreateTaskDialog(
     var estimatedValueStr by remember { mutableStateOf("1500") }
     var details by remember { mutableStateOf("") }
     var priority by remember { mutableStateOf("HIGH") }
+    var taskStatus by remember { mutableStateOf("pending") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -2635,7 +2704,6 @@ fun CreateTaskDialog(
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                var taskStatus by remember { mutableStateOf("pending") }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -2687,7 +2755,7 @@ fun CreateTaskDialog(
                 onClick = {
                     if (title.isNotBlank()) {
                         val value = estimatedValueStr.toDoubleOrNull() ?: 797.0
-                        onSubmit(title, category, workerName, workerRole, client, clientEmail, value, details, priority)
+                        onSubmit(title, category, workerName, workerRole, client, clientEmail, value, details, priority, taskStatus)
                     }
                 },
                 modifier = Modifier.testTag("submit_create_task_button"),
