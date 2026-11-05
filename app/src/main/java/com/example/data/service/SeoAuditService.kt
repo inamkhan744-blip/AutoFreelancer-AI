@@ -183,6 +183,13 @@ class SeoAuditService(
               - If the issue is 'Keyword Cannibalization', provide a step-by-step plan to merge pages with 301 redirects and canonical tags.
               - The solution must be 100% ready to copy-paste for a developer.
             
+            CONSULTATIVE FINANCIAL IMPACT BREAKDOWN (MANDATORY):
+            Clearly show a consultative, non-pushy financial breakdown of 'Money Saved' vs 'Agency Fee':
+            - Estimated Monthly Bleed (Loss from inaction): ~$9,000 - $10,200/month leaking to competitors.
+            - Agency Fee ($797/mo Revenue Recovery System): $797/month.
+            - Net Money Saved / Recovered: +$8,203 to +$9,403/month (Estimated ~11x-12x positive ROI).
+            Tone MUST be consultative, objective, empathetic, and diagnostic — never pushy or aggressive.
+            
             AT THE VERY END OF THE REPORT, you MUST include this exact closing section:
             ---
             ### Done-For-You Implementation
@@ -204,11 +211,12 @@ class SeoAuditService(
             
             Include:
             1. Executive SEO Health Summary (with Daily Bleed estimate)
-            2. Point 1: Title & On-Page Snippet Optimization (Issue Found, Impact, Exact Solution with <title> snippet)
-            3. Point 2: Meta Description & SERP CTR (Issue Found, Impact, Exact Solution with <meta name="description"> tag)
-            4. Point 3: Content Hierarchy & H1 Architecture (Issue Found, Impact, Exact Solution with <h1> tag)
-            5. Point 4: Performance, Image Optimization & Core Web Vitals (Issue Found, Impact, Exact Solution with lazy loading <img loading="lazy"> tag)
-            6. Point 5: Keyword Architecture & Cannibalization Prevention (Issue Found, Impact, Exact Solution with 301 redirect and canonical merge plan)
+            2. Financial Breakdown: Money Saved vs Agency Fee (Consultative ROI Analysis)
+            3. Point 1: Title & On-Page Snippet Optimization (Issue Found, Impact, Exact Solution with <title> snippet)
+            4. Point 2: Meta Description & SERP CTR (Issue Found, Impact, Exact Solution with <meta name="description"> tag)
+            5. Point 3: Content Hierarchy & H1 Architecture (Issue Found, Impact, Exact Solution with <h1> tag)
+            6. Point 4: Performance, Image Optimization & Core Web Vitals (Issue Found, Impact, Exact Solution with lazy loading <img loading="lazy"> tag)
+            7. Point 5: Keyword Architecture & Cannibalization Prevention (Issue Found, Impact, Exact Solution with 301 redirect and canonical merge plan)
             
             CLOSING SECTION (MANDATORY):
             ---
@@ -330,6 +338,12 @@ Redirect 301 /subpage-competing /${domain.take(12)}-guide
             appendLine()
             appendLine("### Executive Summary")
             appendLine("Our automated deep crawl has pinpointed 5 core technical bottlenecks. Below are the exact problem diagnoses, business impacts, and developer-ready copy-paste solutions.")
+            appendLine()
+            appendLine("### Financial Analysis: Capital Allocation & Revenue Recovery")
+            appendLine("• Estimated Monthly Bleed (Inaction Loss): -$10,200/month leaking to competitors")
+            appendLine("• Agency Fee ($797/mo Revenue Recovery System): $797/month")
+            appendLine("• Net Money Saved / Recovered: +$9,403/month (~12.8x Return on Capital)")
+            appendLine("• Consultative Recommendation: Halting active ranking decay recovers capital immediately. The $797 retainer functions as a high-yield recovery asset rather than an operational expense.")
             appendLine()
             solutions.forEachIndexed { idx, sol ->
                 appendLine("### Point ${idx + 1}: ${sol.issueFound}")

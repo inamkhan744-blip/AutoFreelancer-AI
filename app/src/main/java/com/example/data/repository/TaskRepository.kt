@@ -2,11 +2,16 @@ package com.example.data.repository
 
 import android.content.Context
 import android.util.Log
+import com.example.data.local.AppDatabase
+import com.example.data.local.entity.FreelanceTaskEntity
 import com.example.data.model.Task
 import com.example.util.LiveWorkerLogStore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import org.json.JSONArray
 import java.io.File
 import java.util.UUID
@@ -65,6 +70,36 @@ class TaskRepository(
             storageFile.writeText(jsonArr.toString())
         } catch (e: Exception) {
             Log.e(tag, "Failed to save local tasks: ${e.message}", e)
+        }
+
+        try {
+            val db = AppDatabase.getDatabase(context)
+            CoroutineScope(Dispatchers.IO).launch {
+                val entities = tasks.map { t ->
+                    FreelanceTaskEntity(
+                        id = t.id,
+                        title = t.title,
+                        description = t.details.ifBlank { t.title },
+                        status = when (t.status.uppercase()) {
+                            "PENDING" -> "pending"
+                            "RUNNING", "IN_PROGRESS", "IN-PROGRESS" -> "in-progress"
+                            "COMPLETED", "APPROVED", "DONE" -> "completed"
+                            else -> "pending"
+                        },
+                        client = t.client,
+                        clientEmail = t.clientEmail,
+                        estimatedValue = t.estimatedValue,
+                        priority = t.priority,
+                        category = t.category,
+                        workerRole = t.workerRole,
+                        createdAt = t.createdAt?.toDate()?.time ?: System.currentTimeMillis(),
+                        updatedAt = t.updatedAt?.toDate()?.time ?: System.currentTimeMillis()
+                    )
+                }
+                db.freelanceTaskDao().insertTasks(entities)
+            }
+        } catch (e: Throwable) {
+            Log.w(tag, "Room sync notice: ${e.message}")
         }
     }
 

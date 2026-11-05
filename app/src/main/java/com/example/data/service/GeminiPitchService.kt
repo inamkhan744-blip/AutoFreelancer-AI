@@ -74,19 +74,27 @@ class GeminiPitchService {
             ${CompetitorSpyPrompt.instructionsFor(prospect)}
             Write in a ${outreachTone.promptLabel.lowercase()} tone, chosen from historical email reply-rate data.
             
-            CRITICAL PRICING & DAILY BLEED REQUIREMENTS:
-            - Explicitly highlight their estimated 'Daily Bleed' organic revenue loss (estimated -$120 to -$480/day leaking to aggressive SERP competitors).
-            - Pitch the $$dynamicPrice/mo recovery fee (specifically $797 E-Commerce Growth Retainer) as an immediate positive-ROI investment to halt this cash bleed.
-            - NEVER pitch or mention $50 or cheap $50 quotes under any circumstances.
+            CRITICAL HIGH-TICKET SALES PSYCHOLOGY FRAMEWORK ($797/mo Retainer):
+            To eliminate price shock and justify the $797/mo fee, you MUST structure the pitch body using this 4-step framework:
             
-            Write a deeply personalized, high-converting pitch message for this prospect.
+            1. The Loss Anchor (Cost of Inaction):
+               Start the pitch by calculating how much money the client is losing daily because of their bad SEO (e.g., 'You are losing approximately $300/day ($9,000/mo) in organic revenue directly to competitors ranking above you').
+            
+            2. The Value Proposition:
+               Position the $797 not as an 'expense', but as a 'Revenue Recovery System' (e.g., 'For $797/month, our Revenue Recovery System stops that $9,000/month bleed and turns lost searchers into paying clients').
+            
+            3. The Risk Reversal (Guarantee):
+               Include this exact guarantee statement to build massive trust:
+               'If we don't recover your lost traffic in the first 30 days, you don't pay for the second month.'
+            
+            4. The Low-Friction CTA (Call to Action):
+               Do NOT ask them to pay $797 directly in the first email. Instead, the primary low-friction CTA must be:
+               'Reply to this email for a free 10-minute strategy breakdown, or pay $50 for a Micro-Audit to see the exact plan.'
+            
             Guidelines:
-            1. No robotic corporate fluff. Be authentic, technical, helpful, and empathetic.
-            2. Reference their exact situation (e.g. core update traffic drops, migrations, Shopify redirects, or indexation).
-            3. Highlight the calculated Daily Bleed loss to competitors.
-            4. Provide 2-3 value-first insights without charging anything upfront.
-            5. Propose a zero-friction CTA: e.g. "I can record a quick 4-minute video walking through what I found, no strings attached."
-            6. Pitch the $$dynamicPrice recovery package consistently in the message and CTA.
+            1. Tone: Consultative, empathetic, highly technical, and conversational. Zero pushy corporate fluff.
+            2. Reference their exact situation (source platform, website issues, crawl drops).
+            3. Seamlessly weave all 4 psychological anchors into the message.
         """.trimIndent()
 
         try {

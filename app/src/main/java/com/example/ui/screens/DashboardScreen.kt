@@ -336,23 +336,39 @@ fun DashboardScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = {
-                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                        showJarvisDialog = true
-                        jarvisManager.startListening()
-                    } else {
-                        recordAudioLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                    }
-                },
-                modifier = Modifier.testTag("jarvis_mic_button"),
-                containerColor = if (voiceState is VoiceCommandState.Listening) CyberSecondary else CyberPrimary,
-                contentColor = Color.White
+            Column(
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Icon(
-                    imageVector = if (voiceState is VoiceCommandState.Listening) Icons.Default.Stop else Icons.Default.Mic,
-                    contentDescription = "Jarvis Voice Commands"
-                )
+                FloatingActionButton(
+                    onClick = { viewModel.openCreateTaskDialog() },
+                    modifier = Modifier.testTag("fab_create_task"),
+                    containerColor = CyberPrimary,
+                    contentColor = Color.White
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Add,
+                        contentDescription = "Create New Freelancing Task"
+                    )
+                }
+                FloatingActionButton(
+                    onClick = {
+                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                            showJarvisDialog = true
+                            jarvisManager.startListening()
+                        } else {
+                            recordAudioLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        }
+                    },
+                    modifier = Modifier.testTag("jarvis_mic_button"),
+                    containerColor = if (voiceState is VoiceCommandState.Listening) CyberSecondary else CyberTertiary,
+                    contentColor = Color.White
+                ) {
+                    Icon(
+                        imageVector = if (voiceState is VoiceCommandState.Listening) Icons.Default.Stop else Icons.Default.Mic,
+                        contentDescription = "Jarvis Voice Commands"
+                    )
+                }
             }
         },
         containerColor = MaterialTheme.colorScheme.background
@@ -2570,8 +2586,10 @@ fun CreateTaskDialog(
                     value = title,
                     onValueChange = { title = it },
                     label = { Text("Task Title *") },
-                    placeholder = { Text("e.g. Scouting for SEO clients on LinkedIn") },
-                    modifier = Modifier.fillMaxWidth()
+                    placeholder = { Text("e.g. Technical SEO Audit & Core Web Vitals Fix") },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("task_title_input")
                 )
 
                 OutlinedTextField(
@@ -2579,7 +2597,9 @@ fun CreateTaskDialog(
                     onValueChange = { client = it },
                     label = { Text("Client / Target *") },
                     placeholder = { Text("e.g. Series A Tech Startups") },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("task_client_input")
                 )
 
                 OutlinedTextField(
@@ -2604,8 +2624,35 @@ fun CreateTaskDialog(
                         value = estimatedValueStr,
                         onValueChange = { estimatedValueStr = it },
                         label = { Text("Est. Value ($)") },
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("task_value_input")
                     )
+                }
+
+                Text(
+                    text = "Initial Status:",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                var taskStatus by remember { mutableStateOf("pending") }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf("pending", "in-progress", "completed").forEach { st ->
+                        val isSelected = taskStatus == st
+                        FilterChip(
+                            selected = isSelected,
+                            onClick = { taskStatus = st },
+                            label = { Text(st) },
+                            modifier = Modifier.testTag("status_chip_${st.replace("-", "_")}"),
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = CyberPrimary.copy(alpha = 0.25f),
+                                selectedLabelColor = CyberPrimary
+                            )
+                        )
+                    }
                 }
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2626,9 +2673,11 @@ fun CreateTaskDialog(
                 OutlinedTextField(
                     value = details,
                     onValueChange = { details = it },
-                    label = { Text("Execution Details") },
-                    placeholder = { Text("Provide prompt instructions or deliverable scope...") },
-                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Execution Details / Description") },
+                    placeholder = { Text("Provide task description, instructions, or scope...") },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("task_description_input"),
                     minLines = 3
                 )
             }
@@ -2637,10 +2686,11 @@ fun CreateTaskDialog(
             Button(
                 onClick = {
                     if (title.isNotBlank()) {
-                        val value = estimatedValueStr.toDoubleOrNull() ?: 1000.0
+                        val value = estimatedValueStr.toDoubleOrNull() ?: 797.0
                         onSubmit(title, category, workerName, workerRole, client, clientEmail, value, details, priority)
                     }
                 },
+                modifier = Modifier.testTag("submit_create_task_button"),
                 colors = ButtonDefaults.buttonColors(containerColor = CyberPrimary)
             ) {
                 Text("Queue Task")
